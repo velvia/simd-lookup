@@ -1,0 +1,7 @@
+[package]
+name = "simd-lookup"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+simd_aligned = "0.6"
