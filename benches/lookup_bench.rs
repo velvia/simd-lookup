@@ -131,7 +131,7 @@ fn bench_simd_u32x8_lookup(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("simd_lookup");
 
-    group.bench_function("u32x8_single", |b| {
+    group.bench_function("u32x8_single_safe", |b| {
         b.iter(|| {
             for &keys in &u32x8_keys {
                 black_box(simd_lookup.lookup_u32x8(black_box(keys)));
@@ -139,7 +139,15 @@ fn bench_simd_u32x8_lookup(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("u32x8_batch", |b| {
+    group.bench_function("u32x8_single_unchecked", |b| {
+        b.iter(|| {
+            for &keys in &u32x8_keys {
+                black_box(unsafe { simd_lookup.lookup_u32x8_unchecked(black_box(keys)) });
+            }
+        })
+    });
+
+    group.bench_function("u32x8_batch_safe", |b| {
         b.iter(|| {
             simd_lookup.lookup_batch_u32x8(black_box(&u32x8_keys), black_box(&mut results));
         })
@@ -177,9 +185,17 @@ fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("simd_batch", |b| {
+    group.bench_function("simd_batch_safe", |b| {
         b.iter(|| {
             simd_lookup.lookup_batch_u32x8(black_box(&u32x8_keys), black_box(&mut simd_results));
+        })
+    });
+
+    group.bench_function("simd_batch_unchecked", |b| {
+        b.iter(|| {
+            for (i, &keys) in u32x8_keys.iter().enumerate() {
+                simd_results[i] = unsafe { simd_lookup.lookup_u32x8_unchecked(keys) };
+            }
         })
     });
 

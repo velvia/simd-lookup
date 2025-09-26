@@ -158,10 +158,19 @@ impl SimdLookup {
     }
 
     /// Lookup 8 u32 keys at once, returning 8 u8 values
-    /// This is the primary interface for SIMD lookups
+    /// This is the primary interface for SIMD lookups (safe version with bounds checking)
     #[inline]
     pub fn lookup_u32x8(&self, keys: u32x8) -> U8x8 {
         self.lookup_simd_8_impl(keys)
+    }
+
+    /// Unsafe version that skips bounds checking for maximum performance
+    ///
+    /// # Safety
+    /// All keys must be <= max_key, otherwise undefined behavior may occur
+    #[inline]
+    pub unsafe fn lookup_u32x8_unchecked(&self, keys: u32x8) -> U8x8 {
+        self.lookup_simd_8_unchecked_impl(keys)
     }
 
     /// Batch lookup for multiple u32x8 vectors
@@ -219,6 +228,31 @@ impl SimdLookup {
         }
     }
 
+    /// Unchecked implementation for maximum performance (no bounds checking)
+    #[inline]
+    fn lookup_simd_8_unchecked_impl(&self, keys: u32x8) -> U8x8 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            self.lookup_simd_8_avx2_unchecked(keys)
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.lookup_simd_8_neon_unchecked(keys)
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            // Fallback to scalar for other architectures
+            let keys_array = keys.to_array();
+            let mut results = [0u8; 8];
+            for (i, &key) in keys_array.iter().enumerate() {
+                results[i] = unsafe { *self.table.get_unchecked(key as usize) };
+            }
+            U8x8::from(results)
+        }
+    }
+
     #[cfg(target_arch = "x86_64")]
     #[inline]
     fn lookup_simd_8_avx2(&self, keys: u32x8) -> U8x8 {
@@ -237,7 +271,7 @@ impl SimdLookup {
                     _mm256_min_epu32(keys_vec, max_key_vec),
                     keys_vec
                 );
-                let valid_mask_vec = _mm256_castsi256_ps(bounds_check);
+                let valid_mask_vec = bounds_check; // Keep as __m256i
 
                 // Step 1: Divide keys by 4 to get u32 word indices (using right shift by 2)
                 let word_indices = _mm256_srli_epi32::<2>(keys_vec); // keys >> 2 == keys / 4
@@ -277,6 +311,56 @@ impl SimdLookup {
                 let mut results = [0u8; 8];
                 for (i, &key) in keys_array.iter().enumerate() {
                     results[i] = self.lookup_scalar(key);
+                }
+                U8x8::from(results)
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline]
+    fn lookup_simd_8_avx2_unchecked(&self, keys: u32x8) -> U8x8 {
+        unsafe {
+            use std::arch::x86_64::*;
+
+            if is_x86_feature_detected!("avx2") {
+                let keys_array = keys.to_array();
+
+                // Load 8 keys into a 256-bit vector
+                let keys_vec = _mm256_loadu_si256(keys_array.as_ptr() as *const __m256i);
+
+                // Step 1: Divide keys by 4 to get u32 word indices (using right shift by 2)
+                let word_indices = _mm256_srli_epi32::<2>(keys_vec); // keys >> 2 == keys / 4
+
+                // Step 2: Calculate remainders (keys % 4) using bitwise AND
+                let mask_3 = _mm256_set1_epi32(3); // 0b11 mask for % 4
+                let remainders = _mm256_and_si256(keys_vec, mask_3); // keys & 3 == keys % 4
+
+                // Step 3: SIMD gather u32 words containing our target bytes (NO MASK - UNSAFE!)
+                let gathered_words = _mm256_i32gather_epi32(
+                    self.table_u32.as_ptr() as *const i32, // base_addr
+                    word_indices, // vindex
+                    4, // scale factor (sizeof(u32))
+                );
+
+                // Step 4: Extract individual bytes from the gathered u32 words
+                let mut results = [0u8; 8];
+                let gathered_array: [i32; 8] = std::mem::transmute(gathered_words);
+                let remainder_array: [i32; 8] = std::mem::transmute(remainders);
+
+                for i in 0..8 {
+                    let word = gathered_array[i] as u32;
+                    let byte_pos = remainder_array[i] as usize;
+                    results[i] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
+                }
+
+                U8x8::from(results)
+            } else {
+                // Fallback to scalar if AVX2 not available
+                let keys_array = keys.to_array();
+                let mut results = [0u8; 8];
+                for (i, &key) in keys_array.iter().enumerate() {
+                    results[i] = *self.table.get_unchecked(key as usize);
                 }
                 U8x8::from(results)
             }
@@ -341,6 +425,55 @@ impl SimdLookup {
                         results[i + 4] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
                     }
                 }
+            }
+
+            U8x8::from(results)
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline]
+    fn lookup_simd_8_neon_unchecked(&self, keys: u32x8) -> U8x8 {
+        unsafe {
+            use std::arch::aarch64::*;
+
+            let keys_array = keys.to_array();
+
+            // Load 8 keys (2 NEON vectors of 4 u32 each)
+            let keys1 = vld1q_u32(keys_array.as_ptr());
+            let keys2 = vld1q_u32(keys_array.as_ptr().add(4));
+
+            // Step 1: Divide by 4 to get u32 word indices (using right shift by 2)
+            let word_indices1 = vshrq_n_u32::<2>(keys1); // keys >> 2 == keys / 4
+            let word_indices2 = vshrq_n_u32::<2>(keys2);
+
+            // Step 2: Calculate remainders (keys % 4) using bitwise AND
+            let mask_3 = vdupq_n_u32(3); // 0b11 mask for % 4
+            let remainders1 = vandq_u32(keys1, mask_3); // keys & 3 == keys % 4
+            let remainders2 = vandq_u32(keys2, mask_3);
+
+            // Step 3: Manual gather u32 words (ARM doesn't have gather instructions) - NO BOUNDS CHECK!
+            let word_indices1_array: [u32; 4] = std::mem::transmute(word_indices1);
+            let word_indices2_array: [u32; 4] = std::mem::transmute(word_indices2);
+            let remainders1_array: [u32; 4] = std::mem::transmute(remainders1);
+            let remainders2_array: [u32; 4] = std::mem::transmute(remainders2);
+
+            let mut results = [0u8; 8];
+
+            // Process first 4 elements (UNSAFE - no bounds checking)
+            for i in 0..4 {
+                let word_idx = word_indices1_array[i] as usize;
+                let word = *self.table_u32.get_unchecked(word_idx);
+                let byte_pos = remainders1_array[i] as usize;
+                results[i] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
+            }
+
+            // Process second 4 elements (UNSAFE - no bounds checking)
+            for i in 0..4 {
+                let word_idx = word_indices2_array[i] as usize;
+                let word = *self.table_u32.get_unchecked(word_idx);
+                let byte_pos = remainders2_array[i] as usize;
+                results[i + 4] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
             }
 
             U8x8::from(results)
