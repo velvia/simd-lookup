@@ -199,7 +199,7 @@ impl SimdLookup {
     fn lookup_simd_8_impl(&self, keys: u32x8) -> U8x8 {
         #[cfg(target_arch = "x86_64")]
         {
-            self.lookup_simd_8_avx512(keys)
+            self.lookup_simd_8_avx2(keys)
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -221,11 +221,11 @@ impl SimdLookup {
 
     #[cfg(target_arch = "x86_64")]
     #[inline]
-    fn lookup_simd_8_avx512(&self, keys: u32x8) -> U8x8 {
+    fn lookup_simd_8_avx2(&self, keys: u32x8) -> U8x8 {
         unsafe {
             use std::arch::x86_64::*;
 
-            if is_x86_feature_detected!("avx512f") {
+            if is_x86_feature_detected!("avx2") {
                 let keys_array = keys.to_array();
 
                 // Load 8 keys into a 256-bit vector
@@ -233,7 +233,11 @@ impl SimdLookup {
 
                 // Check bounds - create mask for valid indices
                 let max_key_vec = _mm256_set1_epi32(self.max_key as i32);
-                let valid_mask = _mm256_cmple_epu32_mask(keys_vec, max_key_vec);
+                let bounds_check = _mm256_cmpeq_epi32(
+                    _mm256_min_epu32(keys_vec, max_key_vec),
+                    keys_vec
+                );
+                let valid_mask_vec = _mm256_castsi256_ps(bounds_check);
 
                 // Step 1: Divide keys by 4 to get u32 word indices (using right shift by 2)
                 let word_indices = _mm256_srli_epi32::<2>(keys_vec); // keys >> 2 == keys / 4
@@ -243,11 +247,12 @@ impl SimdLookup {
                 let remainders = _mm256_and_si256(keys_vec, mask_3); // keys & 3 == keys % 4
 
                 // Step 3: SIMD gather u32 words containing our target bytes
+                // AVX2 signature: _mm256_mask_i32gather_epi32(src, base_addr, vindex, mask, scale)
                 let gathered_words = _mm256_mask_i32gather_epi32(
-                    _mm256_setzero_si256(), // default value for invalid indices
-                    valid_mask,
-                    word_indices,
-                    self.table_u32.as_ptr() as *const i32,
+                    _mm256_setzero_si256(), // src - default value for invalid indices
+                    self.table_u32.as_ptr() as *const i32, // base_addr
+                    word_indices, // vindex
+                    valid_mask_vec, // mask
                     4, // scale factor (sizeof(u32))
                 );
 
@@ -255,9 +260,10 @@ impl SimdLookup {
                 let mut results = [0u8; 8];
                 let gathered_array: [i32; 8] = std::mem::transmute(gathered_words);
                 let remainder_array: [i32; 8] = std::mem::transmute(remainders);
+                let bounds_array: [i32; 8] = std::mem::transmute(bounds_check);
 
                 for i in 0..8 {
-                    if (valid_mask & (1 << i)) != 0 {
+                    if bounds_array[i] != 0 {
                         let word = gathered_array[i] as u32;
                         let byte_pos = remainder_array[i] as usize;
                         results[i] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
@@ -266,7 +272,7 @@ impl SimdLookup {
 
                 U8x8::from(results)
             } else {
-                // Fallback to scalar if AVX512 not available
+                // Fallback to scalar if AVX2 not available
                 let keys_array = keys.to_array();
                 let mut results = [0u8; 8];
                 for (i, &key) in keys_array.iter().enumerate() {
