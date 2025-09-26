@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
 use simd_lookup::EightValueLookup;
 use simd_aligned::arch::u32x8;
@@ -45,6 +45,7 @@ fn bench_single_lookup(c: &mut Criterion) {
     let test_keys = create_lookup_keys(max_key, 1000);
 
     let mut group = c.benchmark_group("single_lookup");
+    group.throughput(Throughput::Elements(test_keys.len() as u64));
 
     group.bench_function("scalar", |b| {
         b.iter(|| {
@@ -85,6 +86,8 @@ fn bench_batch_lookup(c: &mut Criterion) {
     for batch_size in [64, 256, 1024, 4096] {
         let test_keys = create_lookup_keys(max_key, batch_size);
         let mut results = vec![0u8; batch_size];
+
+        group.throughput(Throughput::Elements(batch_size as u64));
 
         group.bench_with_input(
             BenchmarkId::new("scalar", batch_size),
@@ -130,6 +133,8 @@ fn bench_simd_u32x8_lookup(c: &mut Criterion) {
     let mut results = vec![U8x8::from([0; 8]); u32x8_keys.len()];
 
     let mut group = c.benchmark_group("simd_lookup");
+    // Throughput measured in individual u32 lookups, not u32x8 operations
+    group.throughput(Throughput::Elements((u32x8_keys.len() * 8) as u64));
 
     group.bench_function("u32x8_single_safe", |b| {
         b.iter(|| {
@@ -178,6 +183,8 @@ fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
     let mut simd_results = vec![U8x8::from([0; 8]); u32x8_keys.len()];
 
     let mut group = c.benchmark_group("simd_vs_scalar");
+    // Both measured in individual u32 lookups for fair comparison
+    group.throughput(Throughput::Elements(test_keys.len() as u64));
 
     group.bench_function("scalar_batch", |b| {
         b.iter(|| {
@@ -214,6 +221,8 @@ fn bench_density_comparison(c: &mut Criterion) {
 
         let test_keys = create_lookup_keys(max_key, 1000);
         let mut results = vec![0u8; 1000];
+
+        group.throughput(Throughput::Elements(test_keys.len() as u64));
 
         group.bench_with_input(
             BenchmarkId::new("scalar", density),
@@ -252,6 +261,8 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
 
         let test_keys = create_lookup_keys(max_key, 1000);
         let mut results = vec![0u8; 1000];
+
+        group.throughput(Throughput::Elements(test_keys.len() as u64));
 
         group.bench_with_input(
             BenchmarkId::new("scalar", table_size),
