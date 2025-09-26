@@ -1,4 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use rand::prelude::*;
 use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
 use simd_lookup::EightValueLookup;
 use simd_aligned::arch::u32x8;
@@ -19,18 +20,62 @@ fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
 }
 
 fn create_lookup_keys(max_key: u32, num_keys: usize) -> Vec<u32> {
+    let mut rng = StdRng::seed_from_u64(42); // Fixed seed for reproducible benchmarks
     let mut keys = Vec::with_capacity(num_keys);
-    for i in 0..num_keys {
-        // Mix of valid and invalid keys for realistic testing
-        let key = if i % 4 == 0 {
-            // 25% invalid keys (beyond range)
-            max_key + (i as u32)
+
+    for _ in 0..num_keys {
+        // Generate truly random keys within valid range only
+        // Since tables are sparse (1-5% density), most keys will return 0 (not found)
+        // but all keys are guaranteed to be safe for unsafe lookup functions
+        let key = rng.gen_range(0..=max_key);
+        keys.push(key);
+    }
+
+    // Shuffle to ensure no sequential patterns
+    keys.shuffle(&mut rng);
+    keys
+}
+
+/// Create keys specifically designed to stress the cache hierarchy
+/// These keys will be spread across the entire key space to maximize cache misses
+/// All keys are guaranteed to be within valid range (0..=max_key)
+fn create_cache_busting_keys(max_key: u32, num_keys: usize) -> Vec<u32> {
+    let mut rng = StdRng::seed_from_u64(12345); // Different seed for variety
+    let mut keys = Vec::with_capacity(num_keys);
+
+    // Generate keys with maximum entropy - spread across entire valid range
+    for _ in 0..num_keys {
+        // All keys are within bounds, but uniformly distributed across full range
+        let key = rng.gen_range(0..=max_key);
+        keys.push(key);
+    }
+
+    // Multiple shuffles to ensure maximum randomness
+    keys.shuffle(&mut rng);
+    keys.shuffle(&mut rng);
+
+    keys
+}
+
+/// Create keys that include out-of-bounds values for testing bounds checking
+/// Only use this with SAFE lookup functions that handle out-of-bounds gracefully
+#[allow(dead_code)]
+fn create_bounds_testing_keys(max_key: u32, num_keys: usize) -> Vec<u32> {
+    let mut rng = StdRng::seed_from_u64(999); // Different seed
+    let mut keys = Vec::with_capacity(num_keys);
+
+    for _ in 0..num_keys {
+        let key = if rng.gen_bool(0.2) {
+            // 20% out-of-bounds keys to test bounds checking
+            rng.gen_range(max_key + 1..max_key + 1000000)
         } else {
-            // 75% keys within range (some valid, some invalid)
-            (i as u32) % max_key
+            // 80% valid keys
+            rng.gen_range(0..=max_key)
         };
         keys.push(key);
     }
+
+    keys.shuffle(&mut rng);
     keys
 }
 
@@ -259,8 +304,13 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
         let scalar_lookup = ScalarLookup::new(&entries);
         let hash_lookup = HashLookup::new(&entries);
 
-        let test_keys = create_lookup_keys(max_key, 1000);
-        let mut results = vec![0u8; 1000];
+        // Use cache-busting keys for large tables to stress memory hierarchy
+        let test_keys = if table_size >= 1_000_000 {
+            create_cache_busting_keys(max_key, 2000) // More keys for large tables
+        } else {
+            create_lookup_keys(max_key, 1000)
+        };
+        let mut results = vec![0u8; test_keys.len()];
 
         group.throughput(Throughput::Elements(test_keys.len() as u64));
 
@@ -284,6 +334,63 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
             },
         );
     }
+
+    group.finish();
+}
+
+fn bench_cache_stress_test(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cache_stress");
+
+    // Create a very large sparse table that definitely won't fit in L1/L2 cache
+    let entries = create_sparse_entries(50_000_000, 0.5); // 50M range, 0.5% density = 250K entries
+    let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
+
+    let scalar_lookup = ScalarLookup::new(&entries);
+    let hash_lookup = HashLookup::new(&entries);
+    let simd_lookup = SimdLookup::new(&entries);
+
+    // Generate many random keys to ensure cache thrashing
+    let test_keys = create_cache_busting_keys(max_key, 10000);
+
+    // Convert some keys to u32x8 for SIMD testing
+    let mut u32x8_keys = Vec::new();
+    for chunk in test_keys.chunks(8) {
+        if chunk.len() == 8 {
+            let array: [u32; 8] = chunk.try_into().unwrap();
+            u32x8_keys.push(u32x8::from(array));
+        }
+    }
+
+    let mut scalar_results = vec![0u8; test_keys.len()];
+    let mut simd_results = vec![U8x8::from([0; 8]); u32x8_keys.len()];
+
+    group.throughput(Throughput::Elements(test_keys.len() as u64));
+
+    group.bench_function("scalar_cache_stress", |b| {
+        b.iter(|| {
+            scalar_lookup.lookup_batch(black_box(&test_keys), black_box(&mut scalar_results));
+        })
+    });
+
+    group.bench_function("hash_cache_stress", |b| {
+        b.iter(|| {
+            hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut scalar_results));
+        })
+    });
+
+    group.bench_function("simd_safe_cache_stress", |b| {
+        b.iter(|| {
+            simd_lookup.lookup_batch_u32x8(black_box(&u32x8_keys), black_box(&mut simd_results));
+        })
+    });
+
+    group.bench_function("simd_unchecked_cache_stress", |b| {
+        b.iter(|| {
+            for (i, &keys) in u32x8_keys.iter().enumerate() {
+                simd_results[i] = unsafe { simd_lookup.lookup_u32x8_unchecked(keys) };
+            }
+        })
+    });
 
     group.finish();
 }
@@ -499,6 +606,7 @@ criterion_group!(
     bench_simd_vs_scalar_comparison,
     bench_density_comparison,
     bench_memory_usage_patterns,
+    bench_cache_stress_test,
     bench_eight_value_lookup_single,
     bench_eight_value_lookup_batch,
     bench_eight_value_table_sizes,
