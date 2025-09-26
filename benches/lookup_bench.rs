@@ -297,7 +297,8 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_patterns");
 
     // Test different table sizes to see cache effects
-    for table_size in [10_000, 100_000, 1_000_000, 10_000_000] {
+    // Removed 10K (too small for modern CPUs), added 25M to stress test large tables
+    for table_size in [100_000, 1_000_000, 10_000_000, 25_000_000] {
         let entries = create_sparse_entries(table_size, 1.0); // 1% density
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
@@ -349,6 +350,16 @@ fn bench_cache_stress_test(c: &mut Criterion) {
     let hash_lookup = HashLookup::new(&entries);
     let simd_lookup = SimdLookup::new(&entries);
 
+    // Print memory usage information
+    println!("Cache stress test memory usage:");
+    println!("  Entries: {} ({}% density)", entries.len(), 0.5);
+    println!("  Max key: {} (~{} MB range)", max_key, max_key / 1_000_000);
+    println!("  Scalar table: ~{} MB", (max_key + 1) / 1_000_000);
+    println!("  Hash table: ~{} KB", entries.len() * 5 / 1000);
+    println!("  SIMD u8 table: ~{} MB", (max_key + 1) / 1_000_000);
+    println!("  SIMD u32 table: ~{} MB", (max_key + 1) * 4 / 1_000_000);
+    println!("  SIMD total: ~{} MB", (max_key + 1) * 5 / 1_000_000);
+
     // Generate many random keys to ensure cache thrashing
     let test_keys = create_cache_busting_keys(max_key, 10000);
 
@@ -364,8 +375,14 @@ fn bench_cache_stress_test(c: &mut Criterion) {
     let mut scalar_results = vec![0u8; test_keys.len()];
     let mut simd_results = vec![U8x8::from([0; 8]); u32x8_keys.len()];
 
-    group.throughput(Throughput::Elements(test_keys.len() as u64));
+    // Note: SIMD processes fewer elements due to chunking (10000 -> 9992)
+    let simd_elements_processed = u32x8_keys.len() * 8;
 
+    println!("Cache stress test: {} scalar keys, {} SIMD elements ({} u32x8 vectors)",
+             test_keys.len(), simd_elements_processed, u32x8_keys.len());
+
+    // Scalar and hash benchmarks
+    group.throughput(Throughput::Elements(test_keys.len() as u64));
     group.bench_function("scalar_cache_stress", |b| {
         b.iter(|| {
             scalar_lookup.lookup_batch(black_box(&test_keys), black_box(&mut scalar_results));
@@ -378,6 +395,8 @@ fn bench_cache_stress_test(c: &mut Criterion) {
         })
     });
 
+    // SIMD benchmarks with correct throughput calculation
+    group.throughput(Throughput::Elements(simd_elements_processed as u64));
     group.bench_function("simd_safe_cache_stress", |b| {
         b.iter(|| {
             simd_lookup.lookup_batch_u32x8(black_box(&u32x8_keys), black_box(&mut simd_results));
