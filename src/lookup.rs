@@ -2,10 +2,10 @@
 //!
 //! This module provides three different lookup implementations optimized for different scenarios:
 //! 1. Scalar lookups - direct array indexing for dense tables
-//! 2. Hash-based lookups - using AHash for sparse tables with better cache efficiency
+//! 2. Hash-based lookups - using FxHashMap for sparse tables with better cache efficiency
 //! 3. SIMD gather lookups - vectorized lookups using AVX512 and ARM NEON
 
-use ahash::AHashMap;
+use rustc_hash::FxHashMap;
 use simd_aligned::arch::u32x8;
 
 /// Simple wrapper for 8 u8 values to match u32x8
@@ -82,17 +82,17 @@ impl Lookup for ScalarLookup {
     }
 }
 
-/// Hash-based lookup using AHash for sparse tables
+/// Hash-based lookup using FxHashMap for sparse tables
 ///
 /// Best for sparse tables where only a small percentage of possible keys are populated.
-/// Uses AHash which is optimized for speed over cryptographic security.
+/// Uses FxHashMap which is optimized for integer keys and provides excellent performance.
 pub struct HashLookup {
-    map: AHashMap<u32, u8>,
+    map: FxHashMap<u32, u8>,
 }
 
 impl Lookup for HashLookup {
     fn new(entries: &[(u32, u8)]) -> Self {
-        let mut map = AHashMap::with_capacity(entries.len());
+        let mut map = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
         for &(key, value) in entries {
             map.insert(key, value);
         }
