@@ -342,6 +342,7 @@ impl SimdLookup {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,4 +474,5 @@ mod tests {
         assert_eq!(results[0].to_array(), expected1.to_array());
         assert_eq!(results[1].to_array(), expected2.to_array());
     }
+
 }

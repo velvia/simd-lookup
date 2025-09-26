@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
+use simd_lookup::EightValueLookup;
 use simd_aligned::arch::u32x8;
 
 fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
@@ -260,6 +261,209 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_eight_value_lookup_single(c: &mut Criterion) {
+    let lookup_table = [10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000];
+    let simd_lookup = EightValueLookup::new(&lookup_table);
+
+    // Create test values - mix of values in and out of the table
+    let mut test_values = Vec::new();
+    for &val in &lookup_table {
+        test_values.push(val); // Values in the table
+        test_values.push(val + 1); // Values not in the table
+    }
+
+    let mut group = c.benchmark_group("eight_value_single");
+
+    group.bench_function("simd_position_lookup", |b| {
+        b.iter(|| {
+            for &val in &test_values {
+                black_box(simd_lookup.find_position(black_box(val)));
+            }
+        })
+    });
+
+    group.bench_function("scalar_position_search", |b| {
+        b.iter(|| {
+            for &val in &test_values {
+                let pos = lookup_table.iter().position(|&x| x == black_box(val));
+                black_box(pos.map(|p| p as i32).unwrap_or(-1));
+            }
+        })
+    });
+
+    group.bench_function("scalar_iter_enumerate", |b| {
+        b.iter(|| {
+            for &val in &test_values {
+                let mut result = -1i32;
+                for (i, &table_val) in lookup_table.iter().enumerate() {
+                    if table_val == black_box(val) {
+                        result = i as i32;
+                        break;
+                    }
+                }
+                black_box(result);
+            }
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_eight_value_lookup_batch(c: &mut Criterion) {
+    let lookup_table = [5, 15, 25, 35, 45, 55, 65, 75];
+    let simd_lookup = EightValueLookup::new(&lookup_table);
+
+    let mut group = c.benchmark_group("eight_value_batch");
+
+    for batch_size in [64, 256, 1024, 4096] {
+        // Create test data with 50% hit rate
+        let mut test_values = Vec::new();
+        for i in 0..batch_size {
+            if i % 2 == 0 {
+                test_values.push(lookup_table[i % lookup_table.len()]);
+            } else {
+                test_values.push((i * 7 + 13) as u32); // Likely not in table
+            }
+        }
+
+        // Convert to u32x8 chunks for SIMD
+        let mut u32x8_values = Vec::new();
+        for chunk in test_values.chunks(8) {
+            if chunk.len() == 8 {
+                let array: [u32; 8] = chunk.try_into().unwrap();
+                u32x8_values.push(u32x8::from(array));
+            }
+        }
+
+        let mut simd_results = vec![-1i32; u32x8_values.len() * 8];
+        let mut scalar_results = vec![-1i32; test_values.len()];
+
+        group.bench_with_input(
+            BenchmarkId::new("simd_batch", batch_size),
+            &batch_size,
+            |b, _| {
+                b.iter(|| {
+                    for (i, &values) in u32x8_values.iter().enumerate() {
+                        let results = simd_lookup.find_positions_batch(black_box(values));
+                        let start_idx = i * 8;
+                        for (j, result) in results.iter().enumerate() {
+                            if start_idx + j < simd_results.len() {
+                                simd_results[start_idx + j] = *result;
+                            }
+                        }
+                    }
+                    black_box(&simd_results);
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("scalar_batch", batch_size),
+            &batch_size,
+            |b, _| {
+                b.iter(|| {
+                    for (i, &val) in test_values.iter().enumerate() {
+                        let pos = lookup_table.iter().position(|&x| x == black_box(val));
+                        scalar_results[i] = pos.map(|p| p as i32).unwrap_or(-1);
+                    }
+                    black_box(&scalar_results);
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_eight_value_table_sizes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("eight_value_table_sizes");
+
+    // Test different table sizes (1 to 8 elements)
+    for table_size in 1..=8 {
+        let lookup_table: Vec<u32> = (0..table_size).map(|i| (i * 1000) as u32).collect();
+        let simd_lookup = EightValueLookup::new(&lookup_table);
+
+        // Create test values
+        let test_values: Vec<u32> = (0..1000).map(|i| (i * 13 + 7) as u32).collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("simd", table_size),
+            &table_size,
+            |b, _| {
+                b.iter(|| {
+                    for &val in &test_values {
+                        black_box(simd_lookup.find_position(black_box(val)));
+                    }
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("scalar", table_size),
+            &table_size,
+            |b, _| {
+                b.iter(|| {
+                    for &val in &test_values {
+                        let pos = lookup_table.iter().position(|&x| x == black_box(val));
+                        black_box(pos.map(|p| p as i32).unwrap_or(-1));
+                    }
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_eight_value_hit_rates(c: &mut Criterion) {
+    let lookup_table = [10, 20, 30, 40, 50, 60, 70, 80];
+    let simd_lookup = EightValueLookup::new(&lookup_table);
+
+    let mut group = c.benchmark_group("eight_value_hit_rates");
+
+    // Test different hit rates (0%, 25%, 50%, 75%, 100%)
+    for hit_rate in [0, 25, 50, 75, 100] {
+        let mut test_values = Vec::new();
+
+        for i in 0..1000 {
+            if (i * 100 / 1000) < hit_rate {
+                // Value in table
+                test_values.push(lookup_table[i % lookup_table.len()]);
+            } else {
+                // Value not in table
+                test_values.push((i * 7 + 123) as u32);
+            }
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("simd", hit_rate),
+            &hit_rate,
+            |b, _| {
+                b.iter(|| {
+                    for &val in &test_values {
+                        black_box(simd_lookup.find_position(black_box(val)));
+                    }
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("scalar", hit_rate),
+            &hit_rate,
+            |b, _| {
+                b.iter(|| {
+                    for &val in &test_values {
+                        let pos = lookup_table.iter().position(|&x| x == black_box(val));
+                        black_box(pos.map(|p| p as i32).unwrap_or(-1));
+                    }
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_lookup,
@@ -267,6 +471,10 @@ criterion_group!(
     bench_simd_u32x8_lookup,
     bench_simd_vs_scalar_comparison,
     bench_density_comparison,
-    bench_memory_usage_patterns
+    bench_memory_usage_patterns,
+    bench_eight_value_lookup_single,
+    bench_eight_value_lookup_batch,
+    bench_eight_value_table_sizes,
+    bench_eight_value_hit_rates
 );
 criterion_main!(benches);

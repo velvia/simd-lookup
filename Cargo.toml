@@ -17,3 +17,6 @@ harness = false
 [[bench]]
 name = "lookup_bench"
 harness = false
+
+[[example]]
+name = "eight_value_demo"
