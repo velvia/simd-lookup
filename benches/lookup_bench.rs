@@ -293,12 +293,14 @@ fn bench_density_comparison(c: &mut Criterion) {
     group.finish();
 }
 
+// This should be large as for our use case, the number of lookup keys usually exceeds the table size by quite a lot
+
 fn bench_memory_usage_patterns(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_patterns");
 
     // Test different table sizes to see cache effects
     // Removed 10K (too small for modern CPUs), added 25M to stress test large tables
-    for table_size in [100_000, 1_000_000, 10_000_000, 25_000_000] {
+    for table_size in [40_000, 100_000, 1_000_000, 10_000_000, 25_000_000] {
         let entries = create_sparse_entries(table_size, 1.0); // 1% density
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
@@ -307,9 +309,9 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
 
         // Use cache-busting keys for large tables to stress memory hierarchy
         let test_keys = if table_size >= 1_000_000 {
-            create_cache_busting_keys(max_key, 2000) // More keys for large tables
+            create_cache_busting_keys(max_key, 500_000) // More keys for large tables
         } else {
-            create_lookup_keys(max_key, 1000)
+            create_lookup_keys(max_key, 500_000)
         };
         let mut results = vec![0u8; test_keys.len()];
 
