@@ -29,8 +29,8 @@ fn bench_table64_lookup(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("table64_lookup");
 
-    // Test different sizes of data to lookup
-    for size in [1, 4, 16, 64, 256, 1024].iter() {
+    // Test different sizes of data to lookup (each processes 16 bytes)
+    for size in [1, 64, 1024, 8192, 31250].iter() { // 31250 * 16 = 500k bytes
         let indices = create_test_indices(*size);
         let mut output = vec![u8x16::splat(0); *size];
 
@@ -68,8 +68,8 @@ fn bench_scalar_vs_simd_comparison(c: &mut Criterion) {
     let table_data = create_test_table();
     let table = Table64::new(&table_data);
 
-    // Create a moderate-sized test case for comparison
-    let size = 64;
+    // Create a large test case for comparison
+    let size = 31250; // 31250 * 16 = 500k bytes
     let indices = create_test_indices(size);
     let mut simd_output = vec![u8x16::splat(0); size];
 
@@ -104,7 +104,7 @@ fn bench_scalar_vs_simd_comparison(c: &mut Criterion) {
 fn bench_different_access_patterns(c: &mut Criterion) {
     let table_data = create_test_table();
     let table = Table64::new(&table_data);
-    let size = 64;
+    let size = 31250; // 31250 * 16 = 500k bytes
 
     let mut group = c.benchmark_group("access_patterns");
     group.throughput(Throughput::Bytes((size * 16) as u64));

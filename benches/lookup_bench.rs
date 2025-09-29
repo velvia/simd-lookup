@@ -79,45 +79,7 @@ fn create_bounds_testing_keys(max_key: u32, num_keys: usize) -> Vec<u32> {
     keys
 }
 
-fn bench_single_lookup(c: &mut Criterion) {
-    let entries = create_sparse_entries(1_000_000, 2.0); // 2% density
-    let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
-
-    let scalar_lookup = ScalarLookup::new(&entries);
-    let hash_lookup = HashLookup::new(&entries);
-    let simd_lookup = SimdLookup::new(&entries);
-
-    let test_keys = create_lookup_keys(max_key, 1000);
-
-    let mut group = c.benchmark_group("single_lookup");
-    group.throughput(Throughput::Elements(test_keys.len() as u64));
-
-    group.bench_function("scalar", |b| {
-        b.iter(|| {
-            for &key in &test_keys {
-                black_box(scalar_lookup.lookup(black_box(key)));
-            }
-        })
-    });
-
-    group.bench_function("hash", |b| {
-        b.iter(|| {
-            for &key in &test_keys {
-                black_box(hash_lookup.lookup(black_box(key)));
-            }
-        })
-    });
-
-    group.bench_function("simd_scalar", |b| {
-        b.iter(|| {
-            for &key in &test_keys {
-                black_box(simd_lookup.lookup_scalar(black_box(key)));
-            }
-        })
-    });
-
-    group.finish();
-}
+// Removed single lookup benchmark - batch API is more useful in practice
 
 fn bench_batch_lookup(c: &mut Criterion) {
     let entries = create_sparse_entries(1_000_000, 2.0); // 2% density
@@ -164,7 +126,7 @@ fn bench_simd_u32x8_lookup(c: &mut Criterion) {
 
     let simd_lookup = SimdLookup::new(&entries);
 
-    let test_keys = create_lookup_keys(max_key, 1024);
+    let test_keys = create_lookup_keys(max_key, 500_000);
 
     // Convert to u32x8 chunks
     let mut u32x8_keys = Vec::new();
@@ -213,7 +175,7 @@ fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
     let scalar_lookup = ScalarLookup::new(&entries);
     let simd_lookup = SimdLookup::new(&entries);
 
-    let test_keys = create_lookup_keys(max_key, 1024);
+    let test_keys = create_lookup_keys(max_key, 500_000);
 
     // Convert to u32x8 chunks for SIMD
     let mut u32x8_keys = Vec::new();
@@ -264,8 +226,8 @@ fn bench_density_comparison(c: &mut Criterion) {
         let scalar_lookup = ScalarLookup::new(&entries);
         let hash_lookup = HashLookup::new(&entries);
 
-        let test_keys = create_lookup_keys(max_key, 1000);
-        let mut results = vec![0u8; 1000];
+        let test_keys = create_lookup_keys(max_key, 500_000);
+        let mut results = vec![0u8; 500_000];
 
         group.throughput(Throughput::Elements(test_keys.len() as u64));
 
@@ -421,10 +383,13 @@ fn bench_eight_value_lookup_single(c: &mut Criterion) {
     let simd_lookup = EightValueLookup::new(&lookup_table);
 
     // Create test values - mix of values in and out of the table
-    let mut test_values = Vec::new();
-    for &val in &lookup_table {
-        test_values.push(val); // Values in the table
-        test_values.push(val + 1); // Values not in the table
+    let mut test_values = Vec::with_capacity(500_000);
+    for i in 0..500_000 {
+        if i % 16 < 8 {
+            test_values.push(lookup_table[i % lookup_table.len()]); // Values in the table
+        } else {
+            test_values.push((i * 13 + 7) as u32); // Values likely not in the table
+        }
     }
 
     let mut group = c.benchmark_group("eight_value_single");
@@ -539,7 +504,7 @@ fn bench_eight_value_table_sizes(c: &mut Criterion) {
         let simd_lookup = EightValueLookup::new(&lookup_table);
 
         // Create test values
-        let test_values: Vec<u32> = (0..1000).map(|i| (i * 13 + 7) as u32).collect();
+        let test_values: Vec<u32> = (0..500_000).map(|i| (i * 13 + 7) as u32).collect();
 
         group.bench_with_input(
             BenchmarkId::new("simd", table_size),
@@ -580,8 +545,8 @@ fn bench_eight_value_hit_rates(c: &mut Criterion) {
     for hit_rate in [0, 25, 50, 75, 100] {
         let mut test_values = Vec::new();
 
-        for i in 0..1000 {
-            if (i * 100 / 1000) < hit_rate {
+        for i in 0..500_000 {
+            if (i * 100 / 500_000) < hit_rate {
                 // Value in table
                 test_values.push(lookup_table[i % lookup_table.len()]);
             } else {
@@ -621,7 +586,6 @@ fn bench_eight_value_hit_rates(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_single_lookup,
     bench_batch_lookup,
     bench_simd_u32x8_lookup,
     bench_simd_vs_scalar_comparison,

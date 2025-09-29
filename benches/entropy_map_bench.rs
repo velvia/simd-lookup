@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
 use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup};
-use simd_lookup::entropy_map_lookup::{EntropyMapLookup, EntropyMapBitpackedLookup, create_sparse_entries_for_entropy};
+use simd_lookup::entropy_map_lookup::{EntropyMapLookup, EntropyMapBitpackedLookup};
 use std::time::Instant;
 
 /// Create sparse entries for benchmarking
@@ -117,7 +117,7 @@ fn bench_large_table_lookup(c: &mut Criterion) {
     println!("  EntropyMap Bitpacked: {}ms", bitpacked_construction_time / 1_000_000);
 
     // Create test keys
-    let test_keys = create_lookup_keys(max_key, 10_000);
+    let test_keys = create_lookup_keys(max_key, 500_000);
     let mut results = vec![0u8; test_keys.len()];
 
     let mut group = c.benchmark_group("large_table_lookup");
@@ -165,7 +165,7 @@ fn bench_large_table_single_lookup(c: &mut Criterion) {
     let (entropy_bitpacked_lookup, _) = EntropyMapBitpackedLookup::new(&entries);
 
     // Create test keys
-    let test_keys = create_lookup_keys(max_key, 1000);
+    let test_keys = create_lookup_keys(max_key, 500_000);
 
     let mut group = c.benchmark_group("large_table_single_lookup");
     group.throughput(Throughput::Elements(test_keys.len() as u64));
@@ -222,8 +222,8 @@ fn bench_size_scaling(c: &mut Criterion) {
         let (entropy_dict_lookup, _) = EntropyMapLookup::new(&entries);
         let (entropy_bitpacked_lookup, _) = EntropyMapBitpackedLookup::new(&entries);
 
-        // Create test keys (smaller set for faster benchmarking)
-        let test_keys = create_lookup_keys(max_key, 1000);
+        // Create test keys
+        let test_keys = create_lookup_keys(max_key, 500_000);
 
         group.throughput(Throughput::Elements(test_keys.len() as u64));
 
@@ -332,7 +332,7 @@ fn bench_density_comparison(c: &mut Criterion) {
         let (entropy_dict_lookup, _) = EntropyMapLookup::new(&entries);
 
         // Create test keys
-        let test_keys = create_lookup_keys(max_key, 1000);
+        let test_keys = create_lookup_keys(max_key, 500_000);
 
         group.throughput(Throughput::Elements(test_keys.len() as u64));
 
