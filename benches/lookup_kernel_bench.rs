@@ -53,7 +53,8 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     group.throughput(Throughput::Elements(num_values as u64));
 
     group.bench_function("chunks_of_500", |b| {
-        let mut result_vec = Vec::<u8x16>::new();
+        // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
+        let mut result_vec = Vec::<u8x16>::with_capacity(num_values.div_ceil(16));
         b.iter(|| {
             // Reset the vec for each iteration
             result_vec.clear();
@@ -85,7 +86,8 @@ fn bench_single_vocab_lookup_gather(c: &mut Criterion) {
     group.throughput(Throughput::Elements(num_values as u64));
 
     group.bench_function("chunks_of_500", |b| {
-        let mut result_vec = Vec::<u8x16>::new();
+        // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
+        let mut result_vec = Vec::<u8x16>::with_capacity(num_values.div_ceil(16));
         b.iter(|| {
             // Reset the vec for each iteration
             result_vec.clear();

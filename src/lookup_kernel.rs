@@ -126,10 +126,14 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     ///
     #[inline]
     pub fn lookup_extend_u8x16_vec(&self, values: &[u32], vec: &mut Vec<u8x16>) {
-        vec.reserve(values.len().div_ceil(16));
+        let needed = values.len().div_ceil(16);
         let cur_len = vec.len();
+        // Only reserve if we don't have enough capacity
+        if vec.capacity() < cur_len + needed {
+            vec.reserve(needed);
+        }
         // Safety: we know we will overwrite every element, and we have already validated the length.
-        unsafe { vec.set_len(cur_len + values.len().div_ceil(16)); }
+        unsafe { vec.set_len(cur_len + needed); }
         self.lookup_into_u8x16_buffer(values, &mut vec[cur_len..]);
     }
 }
@@ -215,10 +219,14 @@ impl<'a> SimdSingleVocabU32U8LookupGather<'a> {
     ///
     #[inline]
     pub fn lookup_extend_u8x16_vec(&self, values: &[u32], vec: &mut Vec<u8x16>) {
-        vec.reserve(values.len().div_ceil(16));
+        let needed = values.len().div_ceil(16);
         let cur_len = vec.len();
+        // Only reserve if we don't have enough capacity
+        if vec.capacity() < cur_len + needed {
+            vec.reserve(needed);
+        }
         // Safety: we know we will overwrite every element, and we have already validated the length.
-        unsafe { vec.set_len(cur_len + values.len().div_ceil(16)); }
+        unsafe { vec.set_len(cur_len + needed); }
         self.lookup_func(values, &mut |lookedup_values, start_idx| {
             vec[cur_len + start_idx / 16] = lookedup_values;
         });
