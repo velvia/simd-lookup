@@ -138,6 +138,93 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     }
 }
 
+/// Scalar-only single vocabulary lookup kernel - u32 to u8 lookup table kernel
+/// This version avoids u8x16 SIMD overhead by working directly with [u8; 16] arrays.
+/// More efficient than SimdSingleVocabU32U8Lookup when SIMD assembly overhead is significant.
+#[derive(Debug, Clone)]
+pub struct ScalarSingleVocabU32U8Lookup<'a> {
+    lookup_table: &'a [u8],
+}
+
+impl<'a> ScalarSingleVocabU32U8Lookup<'a> {
+    #[inline]
+    pub fn new(lookup_table: &'a [u8]) -> Self {
+        Self { lookup_table }
+    }
+
+    /// Given a slice of u32 values, looks up each one and calls the user given function on an assembled [u8; 16]
+    /// (16 looked up values) at a time.
+    ///
+    /// The user function is passed (lookedup_values: [u8; 16], start_idx: usize), where start_idx is 0 for the first chunk
+    /// call, 16 for the next one, etc.
+    ///
+    /// If the slice does not divide evenly into 16-item chunks, the rest is handled by filling missing values in the
+    /// array with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
+    #[inline]
+    pub fn lookup_func<F>(&self, values: &[u32], f: &mut F)
+    where F: FnMut([u8; 16], usize) {
+        let (chunks, rest) = values.as_chunks::<16>();
+        let mut idx = 0;
+        for chunk in chunks {
+            // Get looked up values - LLVM should be able to auto-vectorize this
+            let mut lookedup_values = [0u8; 16];
+            lookedup_values[0] = self.lookup_table[chunk[0] as usize];
+            lookedup_values[1] = self.lookup_table[chunk[1] as usize];
+            lookedup_values[2] = self.lookup_table[chunk[2] as usize];
+            lookedup_values[3] = self.lookup_table[chunk[3] as usize];
+            lookedup_values[4] = self.lookup_table[chunk[4] as usize];
+            lookedup_values[5] = self.lookup_table[chunk[5] as usize];
+            lookedup_values[6] = self.lookup_table[chunk[6] as usize];
+            lookedup_values[7] = self.lookup_table[chunk[7] as usize];
+            lookedup_values[8] = self.lookup_table[chunk[8] as usize];
+            lookedup_values[9] = self.lookup_table[chunk[9] as usize];
+            lookedup_values[10] = self.lookup_table[chunk[10] as usize];
+            lookedup_values[11] = self.lookup_table[chunk[11] as usize];
+            lookedup_values[12] = self.lookup_table[chunk[12] as usize];
+            lookedup_values[13] = self.lookup_table[chunk[13] as usize];
+            lookedup_values[14] = self.lookup_table[chunk[14] as usize];
+            lookedup_values[15] = self.lookup_table[chunk[15] as usize];
+
+            // Call user function with [u8; 16] directly
+            (f)(lookedup_values, idx);
+            idx += 16;
+        }
+
+        // Handle the rest... just loop and do a lookup, feed to user function with 0's for items not in the slice.
+        if !rest.is_empty() {
+            let mut lookedup_values = [0u8; 16];
+            for i in 0..rest.len() {
+                lookedup_values[i] = self.lookup_table[rest[i] as usize];
+            }
+            (f)(lookedup_values, idx);
+        }
+    }
+
+    /// Convenience function which does lookup and writes the results into a Vec of the same length as the input slice.
+    /// Does not transform the looked up values. Efficiently writes entire slices at once.
+    #[inline]
+    pub fn lookup_into_vec(&self, values: &[u32]) -> Vec<u8> {
+        // Allocate a vector with the same length as the input slice - setting the length so contents are uninitialized.
+        // Safety: This is OK as this function explicitly overwrites every value, and there is no reading beforehand.
+        let mut result = Vec::with_capacity(values.len());
+        unsafe { result.set_len(values.len()); }
+
+        // Efficiently write chunks of 16 at once using copy_from_slice
+        let (write_slices, rest) = result[..].as_chunks_mut::<16>();
+        self.lookup_func(values, &mut |lookedup_values, start_idx| {
+            let slice_num = start_idx / 16;
+            if slice_num < write_slices.len() {
+                // Efficient bulk write - copy_from_slice is optimized
+                write_slices[slice_num].copy_from_slice(&lookedup_values);
+            } else {
+                // Handle remainder - write only the needed bytes
+                rest.copy_from_slice(&lookedup_values[..rest.len()]);
+            }
+        });
+        result
+    }
+}
+
 /// SIMD gather-based single vocabulary lookup kernel - u32 to u8 lookup table kernel
 /// Uses VGATHER instructions for faster lookups on large tables.
 ///

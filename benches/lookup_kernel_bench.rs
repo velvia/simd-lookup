@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use rand::prelude::*;
 use simd_aligned::arch::u8x16;
-use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdSingleVocabU32U8LookupGather, SimdDualVocabU32U8Lookup};
+use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdSingleVocabU32U8LookupGather, ScalarSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup};
 
 /// Create a sparse lookup table with the specified size and density
 /// Returns a Vec<u8> where density_percent of entries are nonzero
@@ -102,6 +102,37 @@ fn bench_single_vocab_lookup_gather(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark ScalarSingleVocabU32U8Lookup with chunks of 500 (scalar-only, no u8x16 SIMD)
+fn bench_single_vocab_lookup_scalar(c: &mut Criterion) {
+    let table_size = 15_000_000;
+    let density = 20.0; // 20% density
+
+    println!("Creating lookup table (scalar): {} entries, {}% density", table_size, density);
+    let lookup_table = create_sparse_lookup_table(table_size, density);
+    let lookup = ScalarSingleVocabU32U8Lookup::new(&lookup_table);
+
+    // Create 1 million test values (divisible by 500)
+    let num_values = 1_000_000;
+    let test_values = create_test_values(num_values, table_size);
+
+    let mut group = c.benchmark_group("single_vocab_lookup_scalar");
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    group.bench_function("chunks_of_500", |b| {
+        b.iter(|| {
+            // Process in chunks of 500, calling lookup_into_vec for each chunk
+            let mut all_results = Vec::new();
+            for chunk in test_values.chunks_exact(500) {
+                let result = lookup.lookup_into_vec(black_box(chunk));
+                all_results.extend(result);
+            }
+            black_box(all_results);
+        })
+    });
+
+    group.finish();
+}
+
 /// Benchmark SimdDualVocabU32U8Lookup with chunks of 500
 /// Takes bitwise AND of the two lookup results
 fn bench_dual_vocab_lookup(c: &mut Criterion) {
@@ -145,6 +176,7 @@ criterion_group!(
     benches,
     bench_single_vocab_lookup,
     bench_single_vocab_lookup_gather,
+    bench_single_vocab_lookup_scalar,
     bench_dual_vocab_lookup
 );
 criterion_main!(benches);
