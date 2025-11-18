@@ -69,8 +69,8 @@ impl Lookup for ScalarLookup {
 
     #[inline]
     fn lookup(&self, key: u32) -> u8 {
-        // All our keys are within range, this is just by data validation outside of this.
-        unsafe { *self.table.get_unchecked(key as usize) }
+        // Return 0 for keys outside the table bounds
+        self.table.get(key as usize).copied().unwrap_or(0)
     }
 
     fn lookup_batch(&self, keys: &[u32], results: &mut [u8]) {
