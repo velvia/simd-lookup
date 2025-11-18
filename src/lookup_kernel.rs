@@ -108,6 +108,30 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
         });
         result
     }
+
+    /// Version of lookup_into_vec which writes into a mutable u8x16 buffer, for cascaded lookups
+    #[inline]
+    pub fn lookup_into_u8x16_buffer(&self, values: &[u32], buffer: &mut [u8x16]) {
+        assert!((buffer.len() * 16) >= values.len(), "Buffer must be at least as long as the input values");
+        self.lookup_func(values, &mut |lookedup_values, start_idx| {
+            buffer[start_idx / 16] = lookedup_values;
+        });
+    }
+
+    /// Prepares a Vec of u8x16 for lookup_into_u8x16_buffer by setting the length and preparing.
+    /// The Vec is extended by the amount necessary to hold the results.
+    ///
+    /// ## Safety
+    /// - We unsafe set the length because we know we will overwrite every element.
+    ///
+    #[inline]
+    pub fn lookup_extend_u8x16_vec(&self, values: &[u32], vec: &mut Vec<u8x16>) {
+        vec.reserve(values.len().div_ceil(16));
+        let cur_len = vec.len();
+        // Safety: we know we will overwrite every element, and we have already validated the length.
+        unsafe { vec.set_len(cur_len + values.len().div_ceil(16)); }
+        self.lookup_into_u8x16_buffer(values, &mut vec[cur_len..]);
+    }
 }
 
 /// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.

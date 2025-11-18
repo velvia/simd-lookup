@@ -1,0 +1,9 @@
+# Configure Rust to optimize for the native CPU architecture
+# This enables all available SIMD instructions and CPU-specific optimizations
+[build]
+rustflags = ["-C", "target-cpu=native"]
+
+# Also set for the default target explicitly
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=native"]
+

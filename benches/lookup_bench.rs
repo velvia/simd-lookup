@@ -82,7 +82,7 @@ fn create_bounds_testing_keys(max_key: u32, num_keys: usize) -> Vec<u32> {
 // Removed single lookup benchmark - batch API is more useful in practice
 
 fn bench_batch_lookup(c: &mut Criterion) {
-    let entries = create_sparse_entries(1_000_000, 2.0); // 2% density
+    let entries = create_sparse_entries(15_000_000, 20.0); // 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
     let scalar_lookup = ScalarLookup::new(&entries);
@@ -121,7 +121,7 @@ fn bench_batch_lookup(c: &mut Criterion) {
 }
 
 fn bench_simd_u32x8_lookup(c: &mut Criterion) {
-    let entries = create_sparse_entries(1_000_000, 2.0); // 2% density
+    let entries = create_sparse_entries(15_000_000, 20.0); // 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
     let simd_lookup = SimdLookup::new(&entries);
@@ -169,7 +169,7 @@ fn bench_simd_u32x8_lookup(c: &mut Criterion) {
 }
 
 fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
-    let entries = create_sparse_entries(1_000_000, 2.0); // 2% density
+    let entries = create_sparse_entries(15_000_000, 20.0); // 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
     let scalar_lookup = ScalarLookup::new(&entries);
@@ -219,8 +219,8 @@ fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
 fn bench_density_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("density_comparison");
 
-    for density in [0.1, 0.5, 1.0, 2.0, 5.0, 10.0] {
-        let entries = create_sparse_entries(1_000_000, density);
+    for density in [0.5, 2.0, 5.0, 10.0, 25.0, 50.0] {
+        let entries = create_sparse_entries(15_000_000, density);
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
         let scalar_lookup = ScalarLookup::new(&entries);
@@ -263,11 +263,11 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
     // Test different table sizes to see cache effects
     // Removed 10K (too small for modern CPUs), added 25M to stress test large tables
     for table_size in [40_000, 100_000, 1_000_000, 10_000_000, 25_000_000] {
-        let entries = create_sparse_entries(table_size, 1.0); // 1% density
+        let entries = create_sparse_entries(table_size, 20.0); // 20% density
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-        let scalar_lookup = ScalarLookup::new(&entries);
-        let hash_lookup = HashLookup::new(&entries);
+    let scalar_lookup = ScalarLookup::new(&entries);
+    let hash_lookup = HashLookup::new(&entries);
 
         // Use cache-busting keys for large tables to stress memory hierarchy
         let test_keys = if table_size >= 1_000_000 {
@@ -307,7 +307,7 @@ fn bench_cache_stress_test(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_stress");
 
     // Create a very large sparse table that definitely won't fit in L1/L2 cache
-    let entries = create_sparse_entries(50_000_000, 0.5); // 50M range, 0.5% density = 250K entries
+    let entries = create_sparse_entries(15_000_000, 20.0); // 15M range, 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
     let scalar_lookup = ScalarLookup::new(&entries);
@@ -316,7 +316,7 @@ fn bench_cache_stress_test(c: &mut Criterion) {
 
     // Print memory usage information
     println!("Cache stress test memory usage:");
-    println!("  Entries: {} ({}% density)", entries.len(), 0.5);
+    println!("  Entries: {} ({}% density)", entries.len(), 20.0);
     println!("  Max key: {} (~{} MB range)", max_key, max_key / 1_000_000);
     println!("  Scalar table: ~{} MB", (max_key + 1) / 1_000_000);
     println!("  Hash table: ~{} KB", entries.len() * 5 / 1000);

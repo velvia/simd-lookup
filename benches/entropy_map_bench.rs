@@ -39,7 +39,7 @@ fn bench_construction_time(c: &mut Criterion) {
     let mut group = c.benchmark_group("construction_time");
 
     // Test sizes: 500, 1K, 20K, 100K as requested
-    let sizes = [500, 1_000, 20_000, 100_000];
+    let sizes = [100_000, 500_000, 3_000_000, 15_000_000];
     let density = 1.0; // 1% density
 
     for &size in &sizes {
@@ -210,22 +210,22 @@ fn bench_size_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("size_scaling");
 
     // Test different sizes to see how lookup performance scales
-    let sizes = [1_000, 10_000, 100_000, 1_000_000];
+    let sizes = [1_000, 10_000, 100_000, 1_000_000, 15_000_000];
     let density = 1.0; // 1% density
 
     for &size in &sizes {
         let entries = create_sparse_entries(size, density);
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-        // Build lookup structures
-        let hash_lookup = HashLookup::new(&entries);
-        let (entropy_dict_lookup, _) = EntropyMapLookup::new(&entries);
-        let (entropy_bitpacked_lookup, _) = EntropyMapBitpackedLookup::new(&entries);
+    // Build lookup structures
+    let hash_lookup = HashLookup::new(&entries);
+    let (entropy_dict_lookup, _) = EntropyMapLookup::new(&entries);
+    let (entropy_bitpacked_lookup, _) = EntropyMapBitpackedLookup::new(&entries);
 
-        // Create test keys
-        let test_keys = create_lookup_keys(max_key, 500_000);
+    // Create test keys
+    let test_keys = create_lookup_keys(max_key, 500_000);
 
-        group.throughput(Throughput::Elements(test_keys.len() as u64));
+    group.throughput(Throughput::Elements(test_keys.len() as u64));
 
         group.bench_with_input(
             BenchmarkId::new("rustc_hash", size),
@@ -320,7 +320,7 @@ fn bench_memory_and_construction_analysis(c: &mut Criterion) {
 fn bench_density_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("density_comparison");
 
-    let table_size = 1_000_000; // 1M table size
+    let table_size = 15_000_000; // 15M table size
     let densities = [0.1, 0.5, 1.0, 2.0, 5.0]; // Different density percentages
 
     for &density in &densities {
