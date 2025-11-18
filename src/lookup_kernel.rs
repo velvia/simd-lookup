@@ -134,6 +134,276 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     }
 }
 
+/// SIMD gather-based single vocabulary lookup kernel - u32 to u8 lookup table kernel
+/// Uses VGATHER instructions for faster lookups on large tables.
+///
+/// This version uses SIMD gather to load u32 words containing target bytes,
+/// then extracts the specific bytes. Much faster than scalar lookups for large tables.
+/// Uses the same approach as SimdLookup::lookup_simd_8_impl() but processes 16 values at once.
+#[derive(Debug, Clone)]
+pub struct SimdSingleVocabU32U8LookupGather<'a> {
+    lookup_table: &'a [u8],
+    table_u32: Vec<u32>, // Same data viewed as u32 words for SIMD gather
+    max_key: u32,
+}
+
+impl<'a> SimdSingleVocabU32U8LookupGather<'a> {
+    #[inline]
+    pub fn new(lookup_table: &'a [u8]) -> Self {
+        let max_key = if lookup_table.is_empty() {
+            0
+        } else {
+            (lookup_table.len() - 1) as u32
+        };
+
+        // Create u32 view of the table, padding to u32 boundary if needed
+        let u32_len = (lookup_table.len() + 3) / 4; // Round up to nearest u32 boundary
+        let mut padded_table = lookup_table.to_vec();
+        padded_table.resize(u32_len * 4, 0); // Pad with zeros
+
+        // Convert to u32 view - safe because we padded to u32 boundary
+        let table_u32 = padded_table
+            .chunks_exact(4)
+            .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+
+        Self {
+            lookup_table,
+            table_u32,
+            max_key,
+        }
+    }
+
+    /// SIMD gather-based lookup function using VGATHER instructions.
+    /// Given a slice of u32 values, looks up each one using SIMD gather and calls the user given function
+    /// on an assembled u8x16 (16 looked up values) at a time.
+    ///
+    /// The user function is passed (lookedup_values: u8x16, start_idx: usize), where start_idx is 0 for the first chunk
+    /// call, 16 for the next one, etc.
+    ///
+    /// If the slice does not divide evenly into 16-item chunks, the rest is handled by filling missing values in the
+    /// u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
+    #[inline]
+    pub fn lookup_func<F>(&self, values: &[u32], f: &mut F)
+    where F: FnMut(u8x16, usize) {
+        let (chunks, rest) = values.as_chunks::<16>();
+        let mut idx = 0;
+        for chunk in chunks {
+            let lookedup_values = self.lookup_chunk_16_gather(chunk);
+            (f)(lookedup_values, idx);
+            idx += 16;
+        }
+
+        // Handle the rest... just loop and do a lookup, feed to user function with 0's for items not in the slice.
+        if !rest.is_empty() {
+            let mut values = [0u8; 16];
+            for i in 0..rest.len() {
+                if rest[i] <= self.max_key {
+                    values[i] = self.lookup_table[rest[i] as usize];
+                }
+            }
+            (f)(u8x16::from(values), idx);
+        }
+    }
+
+    /// Prepares a Vec of u8x16 for lookup by setting the length and preparing.
+    /// The Vec is extended by the amount necessary to hold the results.
+    /// Uses SIMD gather for faster lookups.
+    ///
+    /// ## Safety
+    /// - We unsafe set the length because we know we will overwrite every element.
+    ///
+    #[inline]
+    pub fn lookup_extend_u8x16_vec(&self, values: &[u32], vec: &mut Vec<u8x16>) {
+        vec.reserve(values.len().div_ceil(16));
+        let cur_len = vec.len();
+        // Safety: we know we will overwrite every element, and we have already validated the length.
+        unsafe { vec.set_len(cur_len + values.len().div_ceil(16)); }
+        self.lookup_func(values, &mut |lookedup_values, start_idx| {
+            vec[cur_len + start_idx / 16] = lookedup_values;
+        });
+    }
+
+    /// Lookup 16 u32 keys at once using SIMD gather, returning a u8x16
+    #[inline]
+    fn lookup_chunk_16_gather(&self, keys: &[u32; 16]) -> u8x16 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            self.lookup_chunk_16_avx2(keys)
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.lookup_chunk_16_neon(keys)
+        }
+
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        {
+            // Fallback to scalar
+            let mut results = [0u8; 16];
+            for (i, &key) in keys.iter().enumerate() {
+                if key <= self.max_key {
+                    results[i] = self.lookup_table[key as usize];
+                }
+            }
+            u8x16::from(results)
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[inline]
+    fn lookup_chunk_16_avx2(&self, keys: &[u32; 16]) -> u8x16 {
+        unsafe {
+            use std::arch::x86_64::*;
+
+            if is_x86_feature_detected!("avx2") {
+                // Process first 8 keys
+                let keys1_vec = _mm256_loadu_si256(keys.as_ptr() as *const __m256i);
+
+                // Check bounds for first 8
+                let max_key_vec = _mm256_set1_epi32(self.max_key as i32);
+                let bounds_check1 = _mm256_cmpeq_epi32(
+                    _mm256_min_epu32(keys1_vec, max_key_vec),
+                    keys1_vec
+                );
+
+                // Step 1: Divide keys by 4 to get u32 word indices
+                let word_indices1 = _mm256_srli_epi32::<2>(keys1_vec);
+
+                // Step 2: Calculate remainders (keys % 4)
+                let mask_3 = _mm256_set1_epi32(3);
+                let remainders1 = _mm256_and_si256(keys1_vec, mask_3);
+
+                // Step 3: SIMD gather u32 words
+                let gathered_words1 = _mm256_mask_i32gather_epi32(
+                    _mm256_setzero_si256(),
+                    self.table_u32.as_ptr() as *const i32,
+                    word_indices1,
+                    bounds_check1,
+                    4,
+                );
+
+                // Process second 8 keys
+                let keys2_vec = _mm256_loadu_si256(keys.as_ptr().add(8) as *const __m256i);
+
+                // Check bounds for second 8
+                let bounds_check2 = _mm256_cmpeq_epi32(
+                    _mm256_min_epu32(keys2_vec, max_key_vec),
+                    keys2_vec
+                );
+
+                let word_indices2 = _mm256_srli_epi32::<2>(keys2_vec);
+                let remainders2 = _mm256_and_si256(keys2_vec, mask_3);
+
+                let gathered_words2 = _mm256_mask_i32gather_epi32(
+                    _mm256_setzero_si256(),
+                    self.table_u32.as_ptr() as *const i32,
+                    word_indices2,
+                    bounds_check2,
+                    4,
+                );
+
+                // Step 4: Extract bytes from gathered u32 words
+                let mut results = [0u8; 16];
+                let gathered_array1: [i32; 8] = std::mem::transmute(gathered_words1);
+                let gathered_array2: [i32; 8] = std::mem::transmute(gathered_words2);
+                let remainder_array1: [i32; 8] = std::mem::transmute(remainders1);
+                let remainder_array2: [i32; 8] = std::mem::transmute(remainders2);
+                let bounds_array1: [i32; 8] = std::mem::transmute(bounds_check1);
+                let bounds_array2: [i32; 8] = std::mem::transmute(bounds_check2);
+
+                for i in 0..8 {
+                    if bounds_array1[i] != 0 {
+                        let word = gathered_array1[i] as u32;
+                        let byte_pos = remainder_array1[i] as usize;
+                        results[i] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
+                    }
+                }
+
+                for i in 0..8 {
+                    if bounds_array2[i] != 0 {
+                        let word = gathered_array2[i] as u32;
+                        let byte_pos = remainder_array2[i] as usize;
+                        results[i + 8] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
+                    }
+                }
+
+                u8x16::from(results)
+            } else {
+                // Fallback to scalar if AVX2 not available
+                let mut results = [0u8; 16];
+                for (i, &key) in keys.iter().enumerate() {
+                    if key <= self.max_key {
+                        results[i] = self.lookup_table[key as usize];
+                    }
+                }
+                u8x16::from(results)
+            }
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline]
+    fn lookup_chunk_16_neon(&self, keys: &[u32; 16]) -> u8x16 {
+        unsafe {
+            use std::arch::aarch64::*;
+
+            // Load 16 keys (4 NEON vectors of 4 u32 each)
+            let keys1 = vld1q_u32(keys.as_ptr());
+            let keys2 = vld1q_u32(keys.as_ptr().add(4));
+            let keys3 = vld1q_u32(keys.as_ptr().add(8));
+            let keys4 = vld1q_u32(keys.as_ptr().add(12));
+
+            // Check bounds
+            let max_key_vec = vdupq_n_u32(self.max_key);
+            let valid1 = vcleq_u32(keys1, max_key_vec);
+            let valid2 = vcleq_u32(keys2, max_key_vec);
+            let valid3 = vcleq_u32(keys3, max_key_vec);
+            let valid4 = vcleq_u32(keys4, max_key_vec);
+
+            // Divide by 4 to get u32 word indices
+            let word_indices1 = vshrq_n_u32::<2>(keys1);
+            let word_indices2 = vshrq_n_u32::<2>(keys2);
+            let word_indices3 = vshrq_n_u32::<2>(keys3);
+            let word_indices4 = vshrq_n_u32::<2>(keys4);
+
+            // Calculate remainders
+            let mask_3 = vdupq_n_u32(3);
+            let remainders1 = vandq_u32(keys1, mask_3);
+            let remainders2 = vandq_u32(keys2, mask_3);
+            let remainders3 = vandq_u32(keys3, mask_3);
+            let remainders4 = vandq_u32(keys4, mask_3);
+
+            // Manual gather (ARM doesn't have gather instructions)
+            let mut results = [0u8; 16];
+
+            let process_chunk = |results: &mut [u8; 16], word_indices: uint32x4_t, remainders: uint32x4_t, valid: uint32x4_t, offset: usize| {
+                let word_indices_array: [u32; 4] = std::mem::transmute(word_indices);
+                let remainders_array: [u32; 4] = std::mem::transmute(remainders);
+                let valid_array: [u32; 4] = std::mem::transmute(valid);
+
+                for i in 0..4 {
+                    if valid_array[i] != 0 {
+                        let word_idx = word_indices_array[i] as usize;
+                        if word_idx < self.table_u32.len() {
+                            let word = self.table_u32[word_idx];
+                            let byte_pos = remainders_array[i] as usize;
+                            results[offset + i] = ((word >> (byte_pos * 8)) & 0xFF) as u8;
+                        }
+                    }
+                }
+            };
+
+            process_chunk(&mut results, word_indices1, remainders1, valid1, 0);
+            process_chunk(&mut results, word_indices2, remainders2, valid2, 4);
+            process_chunk(&mut results, word_indices3, remainders3, valid3, 8);
+            process_chunk(&mut results, word_indices4, remainders4, valid4, 12);
+
+            u8x16::from(results)
+        }
+    }
+}
+
 /// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
 /// This is perfect for event_value + page_screen combined lookup functions.
 /// It is faster than combining multiple single vocabulary lookups due to SIMD combining function.

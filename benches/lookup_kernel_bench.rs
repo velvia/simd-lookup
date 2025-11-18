@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use rand::prelude::*;
 use simd_aligned::arch::u8x16;
-use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup};
+use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdSingleVocabU32U8LookupGather, SimdDualVocabU32U8Lookup};
 
 /// Create a sparse lookup table with the specified size and density
 /// Returns a Vec<u8> where density_percent of entries are nonzero
@@ -68,6 +68,38 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark SimdSingleVocabU32U8LookupGather with chunks of 500 (SIMD gather version)
+fn bench_single_vocab_lookup_gather(c: &mut Criterion) {
+    let table_size = 15_000_000;
+    let density = 20.0; // 20% density
+
+    println!("Creating lookup table (gather): {} entries, {}% density", table_size, density);
+    let lookup_table = create_sparse_lookup_table(table_size, density);
+    let lookup = SimdSingleVocabU32U8LookupGather::new(&lookup_table);
+
+    // Create 1 million test values (divisible by 500)
+    let num_values = 1_000_000;
+    let test_values = create_test_values(num_values, table_size);
+
+    let mut group = c.benchmark_group("single_vocab_lookup_gather");
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    group.bench_function("chunks_of_500", |b| {
+        let mut result_vec = Vec::<u8x16>::new();
+        b.iter(|| {
+            // Reset the vec for each iteration
+            result_vec.clear();
+            // Process in chunks of 500
+            for chunk in test_values.chunks_exact(500) {
+                lookup.lookup_extend_u8x16_vec(black_box(chunk), &mut result_vec);
+            }
+            black_box(&result_vec);
+        })
+    });
+
+    group.finish();
+}
+
 /// Benchmark SimdDualVocabU32U8Lookup with chunks of 500
 /// Takes bitwise AND of the two lookup results
 fn bench_dual_vocab_lookup(c: &mut Criterion) {
@@ -110,6 +142,7 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_single_vocab_lookup,
+    bench_single_vocab_lookup_gather,
     bench_dual_vocab_lookup
 );
 criterion_main!(benches);
