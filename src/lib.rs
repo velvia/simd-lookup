@@ -3,6 +3,7 @@ pub mod lookup;
 pub mod eight_value_lookup;
 pub mod entropy_map_lookup;
 pub mod lookup_kernel;
+pub mod bitpacked_lookup;
 
 // Re-export the main types for convenience
 pub use lookup::{SimdLookup, ScalarLookup, HashLookup, Lookup, U8x8};
