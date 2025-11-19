@@ -633,10 +633,11 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
 
             // Only do lookup2 for positions where vocab1_result is nonzero
             let mut vocab2_result = [0u8; 16];
+            let local_chunk = *chunk2;
             for j in 0..16 {
                 if vocab1_array[j] != 0 {
                     // Only lookup if the first vocab returned nonzero
-                    vocab2_result[j] = self.lookup2[chunk2[j] as usize];
+                    vocab2_result[j] = self.lookup2[local_chunk[j] as usize];
                 }
             }
 
@@ -658,7 +659,6 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
                     vocab2_result[i] = self.lookup2[rest2[i] as usize];
                 }
             }
-
             (f)(vocab1_result, u8x16::from(vocab2_result), idx);
         }
     }
