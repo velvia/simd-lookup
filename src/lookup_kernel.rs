@@ -632,17 +632,32 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             let vocab1_array = vocab1_result.as_array();
 
             // Only do lookup2 for positions where vocab1_result is nonzero
-            let mut vocab2_result = [0u8; 16];
+            // Use two u64 loops, somehow it's faster than writing to [u8; 16] directly.
             let local_chunk = *chunk2;
-            for j in 0..16 {
+
+            // Process high 8 bytes (8-15) into first u64
+            let mut result_high = 0u64;
+            for j in (8..16).rev() {
+                result_high <<= 8;
                 if vocab1_array[j] != 0 {
-                    // Only lookup if the first vocab returned nonzero
-                    vocab2_result[j] = self.lookup2[local_chunk[j] as usize];
+                    result_high += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
 
+            // Process low 8 bytes (0-7) into second u64
+            let mut result_low = 0u64;
+            for j in (0..8).rev() {
+                result_low <<= 8;
+                if vocab1_array[j] != 0 {
+                    result_low += self.lookup2[local_chunk[j] as usize] as u64;
+                }
+            }
+
+            // Combine into u128 for conversion to u8x16
+            let result = ((result_high as u128) << 64) | (result_low as u128);
+
             // Call user function with both u8x16 results
-            (f)(vocab1_result, u8x16::from(vocab2_result), idx);
+            (f)(vocab1_result, u8x16::from(result.to_le_bytes()), idx);
             idx += 16;
         }
 
