@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
-use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup};
+use simd_lookup::lookup::{HashLookup, Lookup};
 use simd_lookup::entropy_map_lookup::{EntropyMapLookup, EntropyMapBitpackedLookup};
 use std::time::Instant;
 
@@ -64,7 +64,8 @@ fn bench_construction_time(c: &mut Criterion) {
             &size,
             |b, _| {
                 b.iter(|| {
-                    let _lookup = ScalarLookup::new(black_box(&entries));
+                    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(black_box(&entries));
+                    let _lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
                 })
             },
         );
@@ -108,7 +109,8 @@ fn bench_large_table_lookup(c: &mut Criterion) {
 
     // Build all lookup structures
     let hash_lookup = HashLookup::new(&entries);
-    let scalar_lookup = ScalarLookup::new(&entries);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
     let (entropy_dict_lookup, dict_construction_time) = EntropyMapLookup::new(&entries);
     let (entropy_bitpacked_lookup, bitpacked_construction_time) = EntropyMapBitpackedLookup::new(&entries);
 
@@ -160,7 +162,8 @@ fn bench_large_table_single_lookup(c: &mut Criterion) {
 
     // Build all lookup structures
     let hash_lookup = HashLookup::new(&entries);
-    let scalar_lookup = ScalarLookup::new(&entries);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
     let (entropy_dict_lookup, _) = EntropyMapLookup::new(&entries);
     let (entropy_bitpacked_lookup, _) = EntropyMapBitpackedLookup::new(&entries);
 

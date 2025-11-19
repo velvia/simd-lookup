@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
-use simd_lookup::lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
+use simd_lookup::lookup::{HashLookup, Lookup, SimdLookup, U8x8};
 use simd_lookup::EightValueLookup;
 use simd_aligned::arch::u32x8;
 
@@ -98,23 +98,38 @@ fn bench_batch_lookup(c: &mut Criterion) {
     let entries = create_sparse_entries(15_000_000, 20.0); // 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-    let scalar_lookup = ScalarLookup::new(&entries);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
     let hash_lookup = HashLookup::new(&entries);
+
+    // Create 1 million test values (same as kernel benchmark)
+    let num_values = 1_000_000;
+    let test_keys = create_lookup_keys(max_key, num_values);
 
     let mut group = c.benchmark_group("batch_lookup");
 
     for batch_size in [64, 256, 1024, 4096] {
-        let test_keys = create_lookup_keys(max_key, batch_size);
-        let mut results = vec![0u8; batch_size];
-
-        group.throughput(Throughput::Elements(batch_size as u64));
+        group.throughput(Throughput::Elements(num_values as u64));
 
         group.bench_with_input(
             BenchmarkId::new("scalar", batch_size),
             &batch_size,
-            |b, _| {
+            |b, &batch_size| {
                 b.iter(|| {
-                    scalar_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
+                    // Process in chunks like the kernel benchmark - more realistic
+                    let mut results = Vec::with_capacity(num_values);
+                    for chunk in test_keys.chunks_exact(batch_size) {
+                        let chunk_len = chunk.len();
+                        let start_len = results.len();
+                        results.reserve(chunk_len);
+                        unsafe { results.set_len(start_len + chunk_len); }
+                        scalar_lookup.lookup_batch(
+                            black_box(chunk),
+                            black_box(&mut results[start_len..])
+                        );
+                    }
+                    results.clear(); // Reset for next iteration
+                    black_box(results);
                 })
             },
         );
@@ -122,9 +137,22 @@ fn bench_batch_lookup(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("hash", batch_size),
             &batch_size,
-            |b, _| {
+            |b, &batch_size| {
                 b.iter(|| {
-                    hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
+                    // Process in chunks like the kernel benchmark - more realistic
+                    let mut results = Vec::with_capacity(num_values);
+                    for chunk in test_keys.chunks_exact(batch_size) {
+                        let chunk_len = chunk.len();
+                        let start_len = results.len();
+                        results.reserve(chunk_len);
+                        unsafe { results.set_len(start_len + chunk_len); }
+                        hash_lookup.lookup_batch(
+                            black_box(chunk),
+                            black_box(&mut results[start_len..])
+                        );
+                    }
+                    results.clear(); // Reset for next iteration
+                    black_box(results);
                 })
             },
         );
@@ -185,7 +213,8 @@ fn bench_simd_vs_scalar_comparison(c: &mut Criterion) {
     let entries = create_sparse_entries(15_000_000, 20.0); // 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-    let scalar_lookup = ScalarLookup::new(&entries);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
     let simd_lookup = SimdLookup::new(&entries);
 
     let test_keys = create_lookup_keys(max_key, 500_000);
@@ -236,7 +265,8 @@ fn bench_density_comparison(c: &mut Criterion) {
         let entries = create_sparse_entries(15_000_000, density);
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-        let scalar_lookup = ScalarLookup::new(&entries);
+        let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+        let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
         let hash_lookup = HashLookup::new(&entries);
 
         let test_keys = create_lookup_keys(max_key, 500_000);
@@ -279,8 +309,9 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
         let entries = create_sparse_entries(table_size, 20.0); // 20% density
         let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-    let scalar_lookup = ScalarLookup::new(&entries);
-    let hash_lookup = HashLookup::new(&entries);
+        let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+        let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
+        let hash_lookup = HashLookup::new(&entries);
 
         // Use cache-busting keys for large tables to stress memory hierarchy
         let test_keys = if table_size >= 1_000_000 {
@@ -323,7 +354,8 @@ fn bench_cache_stress_test(c: &mut Criterion) {
     let entries = create_sparse_entries(15_000_000, 20.0); // 15M range, 20% density
     let max_key = entries.iter().map(|(k, _)| *k).max().unwrap_or(0);
 
-    let scalar_lookup = ScalarLookup::new(&entries);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let scalar_lookup = simd_lookup::lookup::ScalarLookup::from_table(&lookup_table);
     let hash_lookup = HashLookup::new(&entries);
     let simd_lookup = SimdLookup::new(&entries);
 

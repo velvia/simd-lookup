@@ -43,37 +43,26 @@ pub trait Lookup {
 ///
 /// Best for scenarios where the lookup table is relatively dense and you can afford
 /// the memory overhead of a full array.
-pub struct ScalarLookup {
-    table: Vec<u8>,
-    max_key: u32,
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarLookup<'a> {
+    table: &'a [u8],
 }
 
-impl Lookup for ScalarLookup {
-    fn new(entries: &[(u32, u8)]) -> Self {
-        if entries.is_empty() {
-            return Self {
-                table: Vec::new(),
-                max_key: 0,
-            };
-        }
-
-        let max_key = entries.iter().map(|(k, _)| *k).max().unwrap();
-        let mut table = vec![0u8; (max_key + 1) as usize];
-
-        for &(key, value) in entries {
-            table[key as usize] = value;
-        }
-
-        Self { table, max_key }
+impl<'a> ScalarLookup<'a> {
+    /// Create a new ScalarLookup from a reference to a lookup table
+    #[inline]
+    pub fn from_table(table: &'a [u8]) -> Self {
+        Self { table }
     }
 
     #[inline]
-    fn lookup(&self, key: u32) -> u8 {
+    pub fn lookup(&self, key: u32) -> u8 {
         // Return 0 for keys outside the table bounds
         self.table.get(key as usize).copied().unwrap_or(0)
     }
 
-    fn lookup_batch(&self, keys: &[u32], results: &mut [u8]) {
+    #[inline]
+    pub fn lookup_batch(&self, keys: &[u32], results: &mut [u8]) {
         assert_eq!(keys.len(), results.len());
 
         for (i, &key) in keys.iter().enumerate() {
@@ -81,6 +70,57 @@ impl Lookup for ScalarLookup {
         }
     }
 }
+
+/// Helper function to create a lookup table Vec from entries
+/// This is moved outside ScalarLookup as requested - use this in benchmarks
+pub fn create_scalar_lookup_table(entries: &[(u32, u8)]) -> Vec<u8> {
+    if entries.is_empty() {
+        return Vec::new();
+    }
+
+    let max_key = entries.iter().map(|(k, _)| *k).max().unwrap();
+    let mut table = vec![0u8; (max_key + 1) as usize];
+
+    for &(key, value) in entries {
+        table[key as usize] = value;
+    }
+
+    table
+}
+
+/// Wrapper for ScalarLookup that owns the table Vec (for Lookup trait compatibility)
+pub struct ScalarLookupOwned {
+    table: Vec<u8>,
+}
+
+impl ScalarLookupOwned {
+    /// Get a ScalarLookup reference from this owned wrapper
+    #[inline]
+    pub fn as_lookup(&self) -> ScalarLookup<'_> {
+        ScalarLookup::from_table(&self.table)
+    }
+}
+
+impl Lookup for ScalarLookupOwned {
+    fn new(entries: &[(u32, u8)]) -> Self {
+        Self {
+            table: create_scalar_lookup_table(entries),
+        }
+    }
+
+    #[inline]
+    fn lookup(&self, key: u32) -> u8 {
+        self.as_lookup().lookup(key)
+    }
+
+    #[inline]
+    fn lookup_batch(&self, keys: &[u32], results: &mut [u8]) {
+        self.as_lookup().lookup_batch(keys, results)
+    }
+}
+
+// Type alias for backward compatibility - use ScalarLookupOwned::new() for Lookup trait
+pub type ScalarLookupCompat = ScalarLookupOwned;
 
 /// Hash-based lookup using FxHashMap for sparse tables
 ///
@@ -500,7 +540,7 @@ mod tests {
     #[test]
     fn test_scalar_lookup() {
         let entries = create_test_entries();
-        let lookup = ScalarLookup::new(&entries);
+        let lookup = ScalarLookupOwned::new(&entries);
 
         assert_eq!(lookup.lookup(0), 100);
         assert_eq!(lookup.lookup(5), 105);
@@ -536,7 +576,7 @@ mod tests {
     #[test]
     fn test_batch_lookup() {
         let entries = create_test_entries();
-        let scalar = ScalarLookup::new(&entries);
+        let scalar = ScalarLookupOwned::new(&entries);
         let hash = HashLookup::new(&entries);
 
         let keys = vec![0, 1, 5, 10, 15, 100, 1000, 20000];
