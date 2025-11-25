@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughpu
 use rand::prelude::*;
 use simd_aligned::traits::Simd;
 use simd_lookup::bitpacked_lookup::{BitPackedSingleVocab, BitPackedDualVocab, TwoBit, ThreeBit};
-use simd_lookup::lookup_kernel::{ScalarSingleVocabU32U8Lookup, SimdDualVocabU32U8LookupV2};
+use simd_lookup::lookup_kernel::{SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup};
 
 /// Create sparse entries for kernel benchmarks
 fn create_sparse_entries(size: usize, density_percent: f32, max_value: u8) -> Vec<(u32, u8)> {
@@ -60,15 +60,14 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
 
     // Regular u8 table
     let lookup_table_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup_u8 = ScalarSingleVocabU32U8Lookup::new(&lookup_table_u8);
+    let lookup_u8 = SimdSingleVocabU32U8Lookup::new(&lookup_table_u8);
 
     println!("Single vocab - Regular u8 table: {} MB", lookup_table_u8.len() / 1_000_000);
 
     group.bench_function("regular_u8", |b| {
-        let mut results = vec![0u8; num_values];
+        // let mut results = vec![0u8; num_values];
         b.iter(|| {
-            lookup_u8.lookup_into_slice(black_box(&test_values), black_box(&mut results));
-            black_box(&results);
+            lookup_u8.lookup_into_vec(black_box(&test_values));
         })
     });
 

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 simd_aligned = "0.6"
+wide = "0.8"
 rustc-hash = "2.0"
 entropy-map = "1.1"
 

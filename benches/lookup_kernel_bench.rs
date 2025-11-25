@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use rand::prelude::*;
 use simd_aligned::{arch::u8x16, traits::Simd};
-use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdSingleVocabU32U8LookupGather, ScalarSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2};
+use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2};
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
 /// Returns Vec<(u32, u8)> entries that can be converted to a lookup table
@@ -82,73 +82,6 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdSingleVocabU32U8LookupGather with chunks of 500 (SIMD gather version)
-fn bench_single_vocab_lookup_gather(c: &mut Criterion) {
-    let table_size = 15_000_000;
-    let density = 20.0; // 20% density
-
-    println!("Creating lookup table (gather): {} entries, {}% density", table_size, density);
-    // Use the same table creation method as batch_lookup benchmark
-    let entries = create_sparse_entries_for_kernel(table_size, density);
-    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup = SimdSingleVocabU32U8LookupGather::new(&lookup_table);
-
-    // Create 1 million test values (divisible by 500)
-    let num_values = 1_000_000;
-    let test_values = create_test_values(num_values, table_size);
-
-    let mut group = c.benchmark_group("single_vocab_lookup_gather");
-    group.throughput(Throughput::Elements(num_values as u64));
-
-    group.bench_function("chunks_of_500", |b| {
-        // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
-        let mut result_vec = Vec::<u8x16>::with_capacity(num_values.div_ceil(16));
-        b.iter(|| {
-            // Reset the vec for each iteration
-            result_vec.clear();
-            // Process in chunks of 500
-            for chunk in test_values.chunks_exact(500) {
-                lookup.lookup_extend_u8x16_vec(black_box(chunk), &mut result_vec);
-            }
-            black_box(&result_vec);
-        })
-    });
-
-    group.finish();
-}
-
-/// Benchmark ScalarSingleVocabU32U8Lookup with chunks of 500 (scalar-only, no u8x16 SIMD)
-fn bench_single_vocab_lookup_scalar(c: &mut Criterion) {
-    let table_size = 15_000_000;
-    let density = 20.0; // 20% density
-
-    println!("Creating lookup table (scalar): {} entries, {}% density", table_size, density);
-    // Use the same table creation method as batch_lookup benchmark
-    let entries = create_sparse_entries_for_kernel(table_size, density);
-    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup = ScalarSingleVocabU32U8Lookup::new(&lookup_table);
-
-    // Create 1 million test values (divisible by 500)
-    let num_values = 1_000_000;
-    let test_values = create_test_values(num_values, table_size);
-
-    let mut group = c.benchmark_group("single_vocab_lookup_scalar");
-    group.throughput(Throughput::Elements(num_values as u64));
-
-    group.bench_function("chunks_of_500", |b| {
-        b.iter(|| {
-            // Process in chunks of 500, reusing the same vec like SimdSingleVocabU32U8Lookup
-            let mut result_vec = Vec::with_capacity(num_values);
-            for chunk in test_values.chunks_exact(500) {
-                lookup.lookup_extend_vec(black_box(chunk), &mut result_vec);
-            }
-            result_vec.clear(); // Reset for next iteration
-            black_box(result_vec);
-        })
-    });
-
-    group.finish();
-}
 
 /// Benchmark SimdDualVocabU32U8Lookup with chunks of 500
 /// Takes bitwise AND of the two lookup results
@@ -249,8 +182,6 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_single_vocab_lookup,
-    bench_single_vocab_lookup_gather,
-    bench_single_vocab_lookup_scalar,
     bench_dual_vocab_lookup,
     bench_dual_vocab_lookup_v2
 );
