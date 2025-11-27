@@ -122,6 +122,7 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
 /// It always does a lookup of the second table.
 /// This is perfect for event_value + page_screen combined lookup functions.
 /// It is faster than combining multiple single vocabulary lookups due to SIMD combining function.
+/// Second lookup table is only looked up if the first lookup table returns a non-zero value.
 ///
 /// The user is responsible for generating the lookup tables - so this can be used for different use cases, including
 /// CASE..WHEN and bitmasking/filtering.
@@ -172,22 +173,11 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             values1[15] = self.lookup_table1[chunk1[15] as usize];
 
             let mut values2 = [0u8; 16];
-            values2[0] = self.lookup_table2[chunk2[0] as usize];
-            values2[1] = self.lookup_table2[chunk2[1] as usize];
-            values2[2] = self.lookup_table2[chunk2[2] as usize];
-            values2[3] = self.lookup_table2[chunk2[3] as usize];
-            values2[4] = self.lookup_table2[chunk2[4] as usize];
-            values2[5] = self.lookup_table2[chunk2[5] as usize];
-            values2[6] = self.lookup_table2[chunk2[6] as usize];
-            values2[7] = self.lookup_table2[chunk2[7] as usize];
-            values2[8] = self.lookup_table2[chunk2[8] as usize];
-            values2[9] = self.lookup_table2[chunk2[9] as usize];
-            values2[10] = self.lookup_table2[chunk2[10] as usize];
-            values2[11] = self.lookup_table2[chunk2[11] as usize];
-            values2[12] = self.lookup_table2[chunk2[12] as usize];
-            values2[13] = self.lookup_table2[chunk2[13] as usize];
-            values2[14] = self.lookup_table2[chunk2[14] as usize];
-            values2[15] = self.lookup_table2[chunk2[15] as usize];
+            for i in 0..16 {
+                if values1[i] != 0 {
+                    values2[i] = self.lookup_table2[chunk2[i] as usize];
+                }
+            }
 
             (f)(u8x16::from(values1), u8x16::from(values2), 16);
         }
