@@ -10,9 +10,9 @@
 //! It turns out these don't significantly improve on a series of scalar lookups.  Also, I forgot that we need to
 //! respect the SeriesIndex on input, as that may be used for series/time filtering.  So these don't really work.
 
-use simd_aligned::{arch::u8x16, traits::Simd};
+use wide::u8x16;
 
-use crate::bulk_vec_extender::BulkVecExtender;
+use crate::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 
 /// Single vocabulary lookup kernel - u32 to u8 lookup table kernel
 /// The user is responsible for generating the lookup table - so this can be used for different use cases, including
@@ -35,8 +35,8 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     /// Given a slice of u32 values, looks up each one and calls the user given function on an assembled u8x16 (16
     /// looked up values) at a time.
     ///
-    /// The user function is passed (lookedup_values: u8x16, start_idx: usize), where start_idx is 0 for the first chunk
-    /// call, 16 for the next one, etc.
+    /// The user function is passed (lookedup_values: u8x16, num_bytes: usize),
+    /// where num_bytes is 16 other than the last/remainder chunk, where it may be less than that.
     ///
     /// If the slice does not divide evenly into 16-item chunks, the rest is handled by filling missing values in the
     /// u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
@@ -44,7 +44,6 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     pub fn lookup_func<F>(&self, values: &[u32], f: &mut F)
     where F: FnMut(u8x16, usize) {
         let (chunks, rest) = values.as_chunks::<16>();
-        let mut idx = 0;
         for chunk in chunks {
             // Get looked up values - LLVM should be able to auto-vectorize this
             let mut values = [0u8; 16];
@@ -66,8 +65,7 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             values[15] = self.lookup_table[chunk[15] as usize];
 
             // Call user function
-            (f)(u8x16::from(values), idx);
-            idx += 16;
+            (f)(u8x16::from(values), 16);
         }
 
         // Handle the rest... just loop and do a lookup, feed to user function with 0's for items not in the slice.
@@ -76,47 +74,31 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             for i in 0..rest.len() {
                 values[i] = self.lookup_table[rest[i] as usize];
             }
-            (f)(u8x16::from(values), idx);
+            (f)(u8x16::from(values), rest.len());
         }
     }
 
     /// Convenience function which does lookup and writes the results into a Vec of the same length as the input slice.
-    /// Does not transform the looked up values.
+    /// Does not transform the looked up values.  Actually, extends a mutable Vec of u8.
     #[inline]
-    pub fn lookup_into_vec(&self, values: &[u32]) -> Vec<u8> {
-        // Allocate a vector with the same length as the input slice - setting the length so contents are uninitialized.
-        // Safety: This is OK as this function explicitly overwrites every value, and there is no reading beforehand.
-        let mut result = Vec::with_capacity(values.len());
-        unsafe { result.set_len(values.len()); }
-
-        // Call lookup_func with a closure that writes to the result vector
-        // NOTE: we do as_chunks_mut as that allows for bulk writes - much more efficient than individual writes.
-        let (write_slices, rest) = result[..].as_chunks_mut::<16>();
-        self.lookup_func(values, &mut |lookedup_values, start_idx| {
-            let slice_num = start_idx / 16;
-            if slice_num < write_slices.len() {
-                // write_slices[slice_num].copy_from_slice(&lookedup_values.as_array());
-
-                // Safety: we have already validated slice_num is within range, and that also means the ensure slice
-                //  is writeable.  Thus, skip bounds checks and do single instructon write.
-                unsafe {
-                    let ptr = write_slices[slice_num].as_mut_ptr() as *mut u8x16;
-                    ptr.write_unaligned(lookedup_values);
-                }
-            } else {
-                // Handle remainder - write only the needed bytes
-                rest.copy_from_slice(&lookedup_values.as_array()[..rest.len()]);
-            }
+    pub fn lookup_into_vec(&self, values: &[u32], buffer: &mut Vec<u8>) {
+        let mut write_guard = buffer.bulk_extend_guard(values.len());
+        let mut write_slice = write_guard.as_mut_slice();
+        let mut num_written = 0;
+        self.lookup_func(values, &mut |lookedup_values, num_bytes| {
+            write_slice.write_u8x16(num_written, lookedup_values, num_bytes);
+            num_written += num_bytes;
         });
-        result
     }
 
     /// Version of lookup_into_vec which writes into a mutable u8x16 buffer, for cascaded lookups
     #[inline]
     pub fn lookup_into_u8x16_buffer(&self, values: &[u32], buffer: &mut [u8x16]) {
         assert!((buffer.len() * 16) >= values.len(), "Buffer must be at least as long as the input values");
-        self.lookup_func(values, &mut |lookedup_values, start_idx| {
-            buffer[start_idx / 16] = lookedup_values;
+        let mut idx = 0;
+        self.lookup_func(values, &mut |lookedup_values, _num_bytes| {
+            buffer[idx] = lookedup_values;
+            idx += 1;
         });
     }
 
@@ -159,8 +141,8 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
     /// on assembled u8x16 results.
     /// - lookup_table1 is used for the first slice, lookup_table2 is used for the second slice.
-    /// - The user function is passed (lookedup_values1: u8x16, lookedup_values2: u8x16, start_idx: usize), where
-    ///   start_idx is 0 for the first chunk call, 16 for the next one, etc.
+    /// - The user function is passed (lookedup_values1: u8x16, lookedup_values2: u8x16, num_bytes), where
+    ///   num_bytes is 16 other than the last/remainder chunk, where it may be less than that.
     /// - If the slices do not divide evenly into 16-item chunks, the rest is handled by filling missing values in the
     ///   u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
     #[inline]
@@ -169,7 +151,6 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
         assert!(values1.len() == values2.len(), "Values1 and values2 must have the same length");
         let (chunks1, rest1) = values1.as_chunks::<16>();
         let (chunks2, rest2) = values2.as_chunks::<16>();
-        let mut idx = 0;
         for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
             // Get looked up values - LLVM should be able to auto-vectorize this
             let mut values1 = [0u8; 16];
@@ -208,8 +189,7 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             values2[14] = self.lookup_table2[chunk2[14] as usize];
             values2[15] = self.lookup_table2[chunk2[15] as usize];
 
-            (f)(u8x16::from(values1), u8x16::from(values2), idx);
-            idx += 16;
+            (f)(u8x16::from(values1), u8x16::from(values2), 16);
         }
 
         // Handle the rest... just loop and do a lookup, feed to user function with 0's for items not in the slice.
@@ -220,44 +200,30 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
                 values1[i] = self.lookup_table1[rest1[i] as usize];
                 values2[i] = self.lookup_table2[rest2[i] as usize];
             }
-            (f)(u8x16::from(values1), u8x16::from(values2), idx);
+            (f)(u8x16::from(values1), u8x16::from(values2), rest1.len());
         }
     }
 
     /// Convenience function which does dual lookup, combines the results using a user-defined combiner function,
-    /// and writes the combined results into a Vec of the same length as the input slices.
+    /// and extends the combined results into a Vec (pushing all combined results)
     ///
     /// The combiner function `f` takes two u8x16 values (looked up from table1 and table2) and returns a combined u8x16.
     /// Unlike the single vocabulary version, this dual vocabulary version requires a combiner function.
     #[inline]
-    pub fn lookup_into_vec<F>(&self, values1: &[u32], values2: &[u32], f: &mut F) -> Vec<u8>
+    pub fn lookup_into_vec<F>(&self, values1: &[u32], values2: &[u32], output: &mut Vec<u8>, f: &mut F)
     where F: FnMut(u8x16, u8x16) -> u8x16 {
         assert!(values1.len() == values2.len(), "Values1 and values2 must have the same length");
 
-        // Allocate a vector with the same length as the input slices - setting the length so contents are uninitialized.
-        // Safety: This is OK as this function explicitly overwrites every value, and there is no reading beforehand.
-        let mut result = Vec::with_capacity(values1.len());
-        unsafe { result.set_len(values1.len()); }
-
-        // Call lookup_func with a closure that writes to the result vector
-        // NOTE: we do as_chunks_mut as that allows for bulk writes - much more efficient than individual writes.
-        let (write_slices, rest) = result[..].as_chunks_mut::<16>();
-        self.lookup_func(values1, values2, &mut |lookedup_values1, lookedup_values2, start_idx| {
+        let mut write_guard = output.bulk_extend_guard(values1.len());
+        let mut write_slice = write_guard.as_mut_slice();
+        let mut num_written = 0;
+        self.lookup_func(values1, values2, &mut |lookedup_values1, lookedup_values2, num_bytes| {
             let combined = (f)(lookedup_values1, lookedup_values2);
-            let slice_num = start_idx / 16;
-            if slice_num < write_slices.len() {
-                // Safety: we have already validated slice_num is within range, and that also means the ensure slice
-                //  is writeable.  Thus, skip bounds checks and do single instruction write.
-                unsafe {
-                    let ptr = write_slices[slice_num].as_mut_ptr() as *mut u8x16;
-                    ptr.write_unaligned(combined);
-                }
-            } else {
-                // Handle remainder - write only the needed bytes
-                rest.copy_from_slice(&combined.as_array()[..rest.len()]);
-            }
+            write_slice.write_u8x16(num_written, combined, num_bytes);
+            num_written += num_bytes;
         });
-        result
+        // write_guard drops here, automatically finalizes to correct length.  We don't have to set final
+        // number of bytes since it is the same as the input, which is the default
     }
 }
 
@@ -293,6 +259,9 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
     ///   start_idx is 0 for the first chunk call, 16 for the next one, etc.
     /// - If the slices do not divide evenly into 16-item chunks, the rest is handled by filling missing values in the
     ///   u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
+    ///
+    /// The lookup function is passed these arguments: (lookedup_values1: u8x16, lookedup_values2: u8x16, num_bytes)
+    /// - num_bytes: usually 16, but may be less for the last/remainder chunk.
     #[inline]
     pub fn lookup_func<F>(&mut self, values1: &[u32], values2: &[u32], f: &mut F)
     where F: FnMut(u8x16, u8x16, usize) {
@@ -305,7 +274,6 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
         self.lookup1.lookup_extend_u8x16_vec(values1, &mut self.temp_buffer);
 
         let (chunks2, rest2) = values2.as_chunks::<16>();
-        let mut idx = 0;
 
         // Process full chunks
         for (i, chunk2) in chunks2.iter().enumerate() {
@@ -338,8 +306,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             let result = ((result_high as u128) << 64) | (result_low as u128);
 
             // Call user function with both u8x16 results
-            (f)(vocab1_result, u8x16::from(result.to_le_bytes()), idx);
-            idx += 16;
+            (f)(vocab1_result, u8x16::from(result.to_le_bytes()), 16);
         }
 
         // Handle the remainder
@@ -355,7 +322,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
                     vocab2_result[i] = self.lookup2[rest2[i] as usize];
                 }
             }
-            (f)(vocab1_result, u8x16::from(vocab2_result), idx);
+            (f)(vocab1_result, u8x16::from(vocab2_result), rest2.len());
         }
     }
 }
@@ -373,7 +340,8 @@ mod tests {
 
         // Test with values that are less than lookup table size
         let values = vec![0u32, 1, 2, 3, 4, 1, 2, 3];
-        let result = lookup.lookup_into_vec(&values);
+        let mut result = Vec::new();
+        lookup.lookup_into_vec(&values, &mut result);
 
         assert_eq!(result.len(), values.len());
         assert_eq!(result[0], 0);
@@ -398,7 +366,8 @@ mod tests {
         let values2 = vec![0u32, 1, 2, 3, 4, 1, 2, 3];
 
         // Use bitwise OR as the combiner function
-        let result = lookup.lookup_into_vec(&values1, &values2, &mut |v1, v2| v1 | v2);
+        let mut result = Vec::new();
+        lookup.lookup_into_vec(&values1, &values2, &mut result, &mut |v1, v2| v1 | v2);
 
         assert_eq!(result.len(), values1.len());
         assert_eq!(result[0], 0);   // 0
@@ -423,7 +392,8 @@ mod tests {
         let values2 = vec![0u32; 50];
 
         // Use addition as the combiner function
-        let result = lookup.lookup_into_vec(&values1, &values2, &mut |v1, v2| v1 + v2);
+        let mut result = Vec::new();
+        lookup.lookup_into_vec(&values1, &values2, &mut result, &mut |v1, v2| v1 + v2);
 
         assert_eq!(result.len(), 50);
         // All results should be 1 + 2 = 3
@@ -445,16 +415,17 @@ mod tests {
 
         let mut vocab1_results = Vec::new();
         let mut vocab2_results = Vec::new();
-        let mut indices = Vec::new();
+        let mut num_bytes_list = Vec::new();
 
-        lookup.lookup_func(&values1, &values2, &mut |v1, v2, idx| {
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
             vocab1_results.push(v1);
             vocab2_results.push(v2);
-            indices.push(idx);
+            num_bytes_list.push(num_bytes);
         });
 
-        assert_eq!(indices.len(), 1);
-        assert_eq!(indices[0], 0);
+        // 5 values = 0 full chunks + 1 remainder of 5
+        assert_eq!(num_bytes_list.len(), 1);
+        assert_eq!(num_bytes_list[0], 5);
 
         // Check vocab1 results
         let v1_array = vocab1_results[0].as_array();
@@ -486,18 +457,18 @@ mod tests {
 
         let mut vocab1_results = Vec::new();
         let mut vocab2_results = Vec::new();
-        let mut indices = Vec::new();
+        let mut num_bytes_list = Vec::new();
 
-        lookup.lookup_func(&values1, &values2, &mut |v1, v2, idx| {
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
             vocab1_results.push(v1);
             vocab2_results.push(v2);
-            indices.push(idx);
+            num_bytes_list.push(num_bytes);
         });
 
         // Should have 2 chunks: one full (16) and one remainder (9)
-        assert_eq!(indices.len(), 2);
-        assert_eq!(indices[0], 0);
-        assert_eq!(indices[1], 16);
+        assert_eq!(num_bytes_list.len(), 2);
+        assert_eq!(num_bytes_list[0], 16);
+        assert_eq!(num_bytes_list[1], 9);
 
         // Check first chunk (full 16)
         let v1_chunk0 = vocab1_results[0].as_array();
@@ -545,7 +516,7 @@ mod tests {
         let mut vocab1_results = Vec::new();
         let mut vocab2_results = Vec::new();
 
-        lookup.lookup_func(&values1, &values2, &mut |v1, v2, _idx| {
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, _num_bytes| {
             vocab1_results.push(v1);
             vocab2_results.push(v2);
         });
@@ -592,34 +563,34 @@ mod tests {
 
         let mut vocab1_results = Vec::new();
         let mut vocab2_results = Vec::new();
-        let mut indices = Vec::new();
+        let mut num_bytes_list = Vec::new();
 
-        lookup.lookup_func(&values1, &values2, &mut |v1, v2, idx| {
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
             vocab1_results.push(v1);
             vocab2_results.push(v2);
-            indices.push(idx);
+            num_bytes_list.push(num_bytes);
         });
 
         // Should have 4 chunks: 3 full (16 each) + 1 remainder (2)
-        assert_eq!(indices.len(), 4);
-        assert_eq!(indices[0], 0);
-        assert_eq!(indices[1], 16);
-        assert_eq!(indices[2], 32);
-        assert_eq!(indices[3], 48);
+        assert_eq!(num_bytes_list.len(), 4);
+        assert_eq!(num_bytes_list[0], 16);
+        assert_eq!(num_bytes_list[1], 16);
+        assert_eq!(num_bytes_list[2], 16);
+        assert_eq!(num_bytes_list[3], 2);
 
         // Verify all chunks
+        let mut global_idx = 0;
         for chunk_idx in 0..4 {
             let v1_chunk = vocab1_results[chunk_idx].as_array();
             let v2_chunk = vocab2_results[chunk_idx].as_array();
-            let start_idx = indices[chunk_idx] as usize;
-            let chunk_len = if chunk_idx < 3 { 16 } else { 2 };
+            let chunk_len = num_bytes_list[chunk_idx];
 
             for i in 0..chunk_len {
-                let global_idx = start_idx + i;
                 let expected_v1 = lookup_table1[values1[global_idx] as usize];
                 assert_eq!(v1_chunk[i], expected_v1);
                 // Since vocab1 is always nonzero (lookup_table1 is all 1s), vocab2 should always be looked up
                 assert_eq!(v2_chunk[i], lookup_table2[values2[global_idx] as usize]);
+                global_idx += 1;
             }
         }
     }
@@ -636,27 +607,26 @@ mod tests {
 
         let mut vocab1_results = Vec::new();
         let mut vocab2_results = Vec::new();
-        let mut indices = Vec::new();
+        let mut num_bytes_list = Vec::new();
 
-        lookup.lookup_func(&values1, &values2, &mut |v1, v2, idx| {
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
             vocab1_results.push(v1);
             vocab2_results.push(v2);
-            indices.push(idx);
+            num_bytes_list.push(num_bytes);
         });
 
         // Should have exactly 2 chunks, no remainder
-        assert_eq!(indices.len(), 2);
-        assert_eq!(indices[0], 0);
-        assert_eq!(indices[1], 16);
+        assert_eq!(num_bytes_list.len(), 2);
+        assert_eq!(num_bytes_list[0], 16);
+        assert_eq!(num_bytes_list[1], 16);
 
         // Verify both chunks
+        let mut global_idx = 0;
         for chunk_idx in 0..2 {
             let v1_chunk = vocab1_results[chunk_idx].as_array();
             let v2_chunk = vocab2_results[chunk_idx].as_array();
-            let start_idx = indices[chunk_idx] as usize;
 
             for i in 0..16 {
-                let global_idx = start_idx + i;
                 let expected_v1 = lookup_table1[values1[global_idx] as usize];
                 assert_eq!(v1_chunk[i], expected_v1);
                 if expected_v1 != 0 {
@@ -664,6 +634,7 @@ mod tests {
                 } else {
                     assert_eq!(v2_chunk[i], 0);
                 }
+                global_idx += 1;
             }
         }
     }

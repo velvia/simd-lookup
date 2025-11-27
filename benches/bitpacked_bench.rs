@@ -1,8 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
 use rand::prelude::*;
-use simd_aligned::traits::Simd;
 use simd_lookup::bitpacked_lookup::{BitPackedSingleVocab, BitPackedDualVocab, TwoBit, ThreeBit};
-use simd_lookup::lookup_kernel::{SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup};
+use simd_lookup::lookup_kernel::{SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup};
 
 /// Create sparse entries for kernel benchmarks
 fn create_sparse_entries(size: usize, density_percent: f32, max_value: u8) -> Vec<(u32, u8)> {
@@ -65,9 +64,11 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
     println!("Single vocab - Regular u8 table: {} MB", lookup_table_u8.len() / 1_000_000);
 
     group.bench_function("regular_u8", |b| {
-        // let mut results = vec![0u8; num_values];
+        let mut results = Vec::new();
         b.iter(|| {
-            lookup_u8.lookup_into_vec(black_box(&test_values));
+            results.clear();
+            lookup_u8.lookup_into_vec(black_box(&test_values), &mut results);
+            black_box(&results);
         })
     });
 

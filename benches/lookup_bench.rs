@@ -2,7 +2,7 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use rand::prelude::*;
 use simd_lookup::lookup::{HashLookup, Lookup, SimdLookup, U8x8};
 use simd_lookup::EightValueLookup;
-use simd_aligned::arch::u32x8;
+use wide::u32x8;
 
 fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
     let num_entries = ((size as f32) * (density_percent / 100.0)) as usize;

@@ -1,5 +1,5 @@
 use simd_lookup::EightValueLookup;
-use simd_aligned::arch::u32x8;
+use wide::u32x8;
 
 fn main() {
     println!("SIMD Eight-Value Position Lookup Demo");

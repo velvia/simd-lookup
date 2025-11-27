@@ -4,7 +4,7 @@
 //! exists in a table of up to 8 u32 values, returning the position (0-7) if found
 //! or -1 if not found.
 
-use simd_aligned::arch::u32x8;
+use wide::u32x8;
 
 /// SIMD-accelerated position lookup for finding a u32 value in a table of up to 8 values
 ///

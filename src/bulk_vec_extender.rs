@@ -186,6 +186,13 @@ pub trait SliceU8SIMDExtender {
 }
 
 impl SliceU8SIMDExtender for &mut [u8] {
+    // TODO: consider using this optimized code if slice_len is 16.  OTOH, it might not be worth it, because
+    //  then we will need a branch, and needing a branch kind of kills the optimization.
+    //
+    // unsafe {
+    //     let ptr = write_slices[slice_num].as_mut_ptr() as *mut u8x16;
+    //     ptr.write_unaligned(combined);
+    // }
     #[inline(always)]
     fn write_u8x16(&mut self, index: usize, value: u8x16, slice_len: usize) {
         self[index..index+slice_len].copy_from_slice(&value.as_array()[..slice_len]);

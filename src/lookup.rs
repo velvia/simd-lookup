@@ -6,7 +6,7 @@
 //! 3. SIMD gather lookups - vectorized lookups using AVX512 and ARM NEON
 
 use rustc_hash::FxHashMap;
-use simd_aligned::arch::u32x8;
+use wide::u32x8;
 
 /// Simple wrapper for 8 u8 values to match u32x8
 #[derive(Debug, Clone, Copy, PartialEq)]

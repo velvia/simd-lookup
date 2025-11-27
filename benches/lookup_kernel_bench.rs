@@ -1,6 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
 use rand::prelude::*;
-use simd_aligned::{arch::u8x16, traits::Simd};
+use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2};
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
@@ -67,13 +67,13 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
 
     group.bench_function("chunks_of_500", |b| {
         // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
-        let mut result_vec = Vec::<u8x16>::with_capacity(num_values.div_ceil(16));
+        let mut result_vec = Vec::with_capacity(num_values);
         b.iter(|| {
             // Reset the vec for each iteration
             result_vec.clear();
             // Process in chunks of 500
             for chunk in test_values.chunks_exact(500) {
-                lookup.lookup_extend_u8x16_vec(black_box(chunk), &mut result_vec);
+                lookup.lookup_into_vec(black_box(chunk), &mut result_vec);
             }
             black_box(&result_vec);
         })
@@ -110,13 +110,13 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
             let mut all_results = Vec::new();
             // Process in chunks of 500
             for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
-                // Use bitwise AND as the combiner function
-                let result = lookup.lookup_into_vec(
+                // Use bitwise AND as the combiner function, but write results to a Vec
+                lookup.lookup_into_vec(
                     black_box(chunk1),
                     black_box(chunk2),
+                    &mut all_results,
                     &mut |v1, v2| v1 & v2
                 );
-                all_results.extend(result);
             }
             black_box(all_results);
         })
@@ -125,38 +125,53 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdDualVocabU32U8LookupV2 with different chunk sizes
+/// Benchmark SimdDualVocabU32U8LookupV2 with varying second lookup table sizes
 /// Takes bitwise AND of the two lookup results and writes nonzero u8's into a Vec
+/// This benchmark tests the effect of lookup table 2 size on throughput
 fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
-    let table_size = 15_000_000;
+    let table1_size = 15_000_000;
     let density = 20.0; // 20% density
+    let chunk_size = 500;
 
-    println!("Creating dual lookup tables (V2): {} entries, {}% density", table_size, density);
-    // Use the same table creation method as batch_lookup benchmark
-    let entries1 = create_sparse_entries_for_kernel(table_size, density);
-    let entries2 = create_sparse_entries_for_kernel(table_size, density);
+    // Create table 1 (fixed at 15M)
+    println!("Creating lookup table 1: {} entries, {}% density", table1_size, density);
+    let entries1 = create_sparse_entries_for_kernel(table1_size, density);
     let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
-    let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-    let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
-    // Create 1 million test values (two sets)
+    // Create 1 million test values for table 1
     let num_values = 1_000_000;
-    let test_values1 = create_test_values(num_values, table_size);
-    let test_values2 = create_test_values(num_values, table_size);
+    let test_values1 = create_test_values(num_values, table1_size);
 
-    let mut group = c.benchmark_group("dual_vocab_lookup_v2");
+    let mut group = c.benchmark_group("dual_vocab_v2_table2_size");
     group.throughput(Throughput::Elements(num_values as u64));
 
-    for chunk_size in [100, 250, 500, 1000] {
-        group.bench_function(format!("chunks_of_{}_bitwise_and", chunk_size), |b| {
+    // Vary second lookup table size: 100k, 500k, 4M, 15M
+    for table2_size in [100_000, 500_000, 4_000_000, 15_000_000] {
+        let size_label = match table2_size {
+            100_000 => "100k",
+            500_000 => "500k",
+            4_000_000 => "4M",
+            15_000_000 => "15M",
+            _ => "unknown",
+        };
+
+        println!("Creating lookup table 2: {} entries", table2_size);
+        let entries2 = create_sparse_entries_for_kernel(table2_size, density);
+        let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
+        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+
+        // Create test values for table 2 (indices within table2_size)
+        let test_values2 = create_test_values(num_values, table2_size);
+
+        group.bench_function(BenchmarkId::new("nonzero_filter", size_label), |b| {
             b.iter(|| {
                 let mut result_vec = Vec::new();
-                // Process in chunks
+                // Process in chunks of 500
                 for (chunk1, chunk2) in test_values1.chunks_exact(chunk_size).zip(test_values2.chunks_exact(chunk_size)) {
                     lookup.lookup_func(
                         black_box(chunk1),
                         black_box(chunk2),
-                        &mut |v1, v2, _idx| {
+                        &mut |v1, v2, _num_bytes| {
                             // AND the two u8x16 values
                             let combined = v1 & v2;
                             let combined_array = combined.as_array();
@@ -170,8 +185,74 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                         }
                     );
                 }
-                result_vec.clear(); // Reset for next iteration
-                black_box(result_vec);
+                black_box(&result_vec);
+            })
+        });
+    }
+
+    group.finish();
+}
+
+/// Benchmark SimdDualVocabU32U8LookupV2 with simple direct output using BulkVecExtender
+/// This version writes all u8x16 results directly without filtering, to measure raw throughput
+fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
+    let table1_size = 15_000_000;
+    let density = 20.0; // 20% density
+    let chunk_size = 500;
+
+    // Create table 1 (fixed at 15M)
+    println!("Creating lookup table 1 (simple): {} entries, {}% density", table1_size, density);
+    let entries1 = create_sparse_entries_for_kernel(table1_size, density);
+    let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
+
+    // Create 1 million test values for table 1
+    let num_values = 1_000_000;
+    let test_values1 = create_test_values(num_values, table1_size);
+
+    let mut group = c.benchmark_group("dual_vocab_v2_simple_output");
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    // Vary second lookup table size: 100k, 500k, 4M, 15M
+    for table2_size in [100_000, 500_000, 4_000_000, 15_000_000] {
+        let size_label = match table2_size {
+            100_000 => "100k",
+            500_000 => "500k",
+            4_000_000 => "4M",
+            15_000_000 => "15M",
+            _ => "unknown",
+        };
+
+        println!("Creating lookup table 2 (simple): {} entries", table2_size);
+        let entries2 = create_sparse_entries_for_kernel(table2_size, density);
+        let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
+        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+
+        // Create test values for table 2 (indices within table2_size)
+        let test_values2 = create_test_values(num_values, table2_size);
+
+        group.bench_function(BenchmarkId::new("direct_write", size_label), |b| {
+            b.iter(|| {
+                let mut result_vec: Vec<u8> = Vec::with_capacity(num_values);
+                // Process in chunks of 500
+                for (chunk1, chunk2) in test_values1.chunks_exact(chunk_size).zip(test_values2.chunks_exact(chunk_size)) {
+                    // Pre-extend the vec for this chunk
+                    let mut guard = result_vec.bulk_extend_guard(chunk1.len());
+                    let mut write_slice = guard.as_mut_slice();
+                    let mut num_written = 0;
+
+                    lookup.lookup_func(
+                        black_box(chunk1),
+                        black_box(chunk2),
+                        &mut |v1, v2, num_bytes| {
+                            // AND the two u8x16 values and write directly
+                            let combined = v1 & v2;
+                            write_slice.write_u8x16(num_written, combined, num_bytes);
+                            num_written += num_bytes;
+                        }
+                    );
+                    // guard drops here, finalizes to correct length
+                }
+                black_box(&result_vec);
             })
         });
     }
@@ -183,7 +264,8 @@ criterion_group!(
     benches,
     bench_single_vocab_lookup,
     bench_dual_vocab_lookup,
-    bench_dual_vocab_lookup_v2
+    bench_dual_vocab_lookup_v2,
+    bench_dual_vocab_lookup_v2_simple
 );
 criterion_main!(benches);
 

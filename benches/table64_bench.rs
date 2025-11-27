@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use simd_aligned::arch::u8x16;
+use wide::u8x16;
 use simd_lookup::table64::Table64;
 
 fn create_test_table() -> [u8; 64] {

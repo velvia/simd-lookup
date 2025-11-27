@@ -1,7 +1,7 @@
 //! Fast SIMD enabled lookup table with <= 64 u8 values
 //!
 
-    use simd_aligned::arch::u8x16;
+    use wide::u8x16;
 
     //------------------- SIMD small table lookup functions (ARM NEON VTBL etc.) ---------------------------------------
     // The idea is optimized small table (say <64 entries) lookup, which can be done in only a few instructions.
