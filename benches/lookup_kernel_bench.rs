@@ -168,6 +168,10 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                 let mut result_vec = Vec::new();
                 // Process in chunks of 500
                 for (chunk1, chunk2) in test_values1.chunks_exact(chunk_size).zip(test_values2.chunks_exact(chunk_size)) {
+                    let mut guard = result_vec.bulk_extend_guard(chunk1.len());
+                    let write_slice = guard.as_mut_slice();
+                    let mut num_written = 0;
+
                     lookup.lookup_func(
                         black_box(chunk1),
                         black_box(chunk2),
@@ -176,14 +180,18 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                             let combined = v1 & v2;
                             let combined_array = combined.as_array();
 
-                            // Write any nonzero u8's into the result Vec
+                            // Write any nonzero u8's into the slice. Using the extend_guard() lets us optimize
+                            // and use faster writes, and avoid the overhead of pushing to a Vec.
                             for &val in combined_array.iter() {
                                 if val != 0 {
-                                    result_vec.push(val);
+                                    write_slice[num_written] = val;
+                                    num_written += 1;
                                 }
                             }
                         }
                     );
+
+                    guard.set_written(num_written);
                 }
                 black_box(&result_vec);
             })
