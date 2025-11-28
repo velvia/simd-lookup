@@ -12,7 +12,10 @@
 
 use wide::u8x16;
 
-use crate::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
+use crate::{
+    bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender},
+    prefetch::{prefetch_address, prefetch_eight_offsets, L3, NTA},
+};
 
 /// Lookup values from lookup table using u32 offsets
 /// Returns the looked up u8 values as a u8x16
@@ -81,7 +84,6 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
             let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
 
-            use crate::prefetch::{prefetch_eight_offsets, L3};
             prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], first_half);
             prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], second_half);
 
@@ -206,7 +208,6 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
             let next_first_half: &[u32; 8] = next_chunk[..8].try_into().unwrap();
             let next_second_half: &[u32; 8] = next_chunk[8..].try_into().unwrap();
 
-            use crate::prefetch::{L3, prefetch_eight_offsets};
             prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_first_half);
             prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_second_half);
 
@@ -320,6 +321,9 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             let mut values2 = [0u8; 16];
             for i in 0..16 {
                 if values1[i] != 0 {
+                    // Prefetch this specific table2 address with NTA to avoid cache pollution
+                    prefetch_address::<_, NTA>(&self.lookup_table2[0], chunk2[i]);
+
                     values2[i] = self.lookup_table2[chunk2[i] as usize];
                 }
             }
@@ -445,6 +449,9 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (8..16).rev() {
                 result_high <<= 8;
                 if vocab1_array[j] != 0 {
+                    // Prefetch this specific table2 address with NTA to avoid cache pollution
+                    prefetch_address::<_, NTA>(&self.lookup2[0], local_chunk[j]);
+
                     result_high += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
@@ -454,6 +461,9 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (0..8).rev() {
                 result_low <<= 8;
                 if vocab1_array[j] != 0 {
+                    // Prefetch this specific table2 address with NTA to avoid cache pollution
+                    prefetch_address::<_, NTA>(&self.lookup2[0], local_chunk[j]);
+
                     result_low += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
