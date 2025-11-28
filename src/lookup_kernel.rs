@@ -52,10 +52,10 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             //       safe with no need for bounds checking.
             let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
             let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
-            // prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], first_half);
-            // prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], second_half);
-            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], first_half);
-            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], second_half);
+            prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], first_half);
+            prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], second_half);
+            // prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], first_half);
+            // prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], second_half);
 
             // Get looked up values - LLVM should be able to auto-vectorize this
             let mut values = [0u8; 16];
