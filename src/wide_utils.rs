@@ -158,15 +158,18 @@ use std::arch::x86_64::*;
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn widen_u32x8_to_u64x8_avx512(input: u32x8) -> u64x8 {
-    let raw = std::mem::transmute::<u32x8, __m256i>(input);
-    let widened = _mm512_cvtepu32_epi64(raw);
-    std::mem::transmute::<__m512i, u64x8>(widened)
+    unsafe {
+        let raw = std::mem::transmute::<u32x8, __m256i>(input);
+        let widened = _mm512_cvtepu32_epi64(raw);
+        std::mem::transmute::<__m512i, u64x8>(widened)
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn widen_u32x8_to_u64x8_avx2(input: u32x8) -> u64x8 {
-    let raw = std::mem::transmute::<u32x8, __m256i>(input);
+    unsafe {
+        let raw = std::mem::transmute::<u32x8, __m256i>(input);
 
     // Split into two 128-bit halves
     let low = _mm256_extracti128_si256(raw, 0);
@@ -176,37 +179,42 @@ unsafe fn widen_u32x8_to_u64x8_avx2(input: u32x8) -> u64x8 {
     let low_wide = _mm256_cvtepu32_epi64(low);
     let high_wide = _mm256_cvtepu32_epi64(high);
 
-    // Combine into 512-bit result (we'll use two 256-bit operations)
-    // For now, let's create the result array manually
-    let low_array: [u64; 4] = std::mem::transmute(low_wide);
-    let high_array: [u64; 4] = std::mem::transmute(high_wide);
+        // Combine into 512-bit result (we'll use two 256-bit operations)
+        // For now, let's create the result array manually
+        let low_array: [u64; 4] = std::mem::transmute(low_wide);
+        let high_array: [u64; 4] = std::mem::transmute(high_wide);
 
-    u64x8::from([
-        low_array[0],
-        low_array[1],
-        low_array[2],
-        low_array[3],
-        high_array[0],
-        high_array[1],
-        high_array[2],
-        high_array[3],
-    ])
+        u64x8::from([
+            low_array[0],
+            low_array[1],
+            low_array[2],
+            low_array[3],
+            high_array[0],
+            high_array[1],
+            high_array[2],
+            high_array[3],
+        ])
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
 unsafe fn widen_u32x4_to_u64x4_avx2(input: u32x4) -> u64x4 {
-    let raw = std::mem::transmute::<u32x4, __m128i>(input);
-    let widened = _mm256_cvtepu32_epi64(raw);
-    std::mem::transmute::<__m256i, u64x4>(widened)
+    unsafe {
+        let raw = std::mem::transmute::<u32x4, __m128i>(input);
+        let widened = _mm256_cvtepu32_epi64(raw);
+        std::mem::transmute::<__m256i, u64x4>(widened)
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn u64x8_from_bitmask_avx512(mask: u8) -> u64x8 {
-    let kmask = mask;
-    let vec = _mm512_maskz_set1_epi64(kmask, -1i64);
-    std::mem::transmute::<__m512i, u64x8>(vec)
+    unsafe {
+        let kmask = mask;
+        let vec = _mm512_maskz_set1_epi64(kmask, -1i64);
+        std::mem::transmute::<__m512i, u64x8>(vec)
+    }
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -223,9 +231,11 @@ unsafe fn u64x8_from_bitmask_avx2(mask: u8) -> u64x8 {
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx512f")]
 unsafe fn u32x8_from_bitmask_avx512(mask: u8) -> u32x8 {
-    let kmask = mask;
-    let vec = _mm256_maskz_set1_epi32(kmask, -1i32);
-    std::mem::transmute::<__m256i, u32x8>(vec)
+    unsafe {
+        let kmask = mask;
+        let vec = _mm256_maskz_set1_epi32(kmask, -1i32);
+        std::mem::transmute::<__m256i, u32x8>(vec)
+    }
 }
 
 #[cfg(target_arch = "x86_64")]

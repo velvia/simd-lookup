@@ -30,6 +30,7 @@
 //! ```
 
 use crate::wide_utils::{FromBitmask, WideUtilsExt};
+#[cfg(target_arch = "aarch64")]
 use std::arch::asm;
 
 /// Cache level marker traits for compile-time dispatch
@@ -87,7 +88,13 @@ pub fn prefetch_address<T, L: CacheLevel>(base: &T, offset: u32) {
     {
         use std::arch::x86_64::*;
         unsafe {
-            _mm_prefetch(ptr, L::HINT);
+            match L::HINT {
+                0 => _mm_prefetch(ptr, _MM_HINT_NTA),
+                1 => _mm_prefetch(ptr, _MM_HINT_T2),
+                2 => _mm_prefetch(ptr, _MM_HINT_T1),
+                3 => _mm_prefetch(ptr, _MM_HINT_T0),
+                _ => _mm_prefetch(ptr, _MM_HINT_T0),
+            }
         }
     }
 
@@ -145,14 +152,58 @@ pub fn prefetch_eight_addresses<T, L: CacheLevel>(base: &T, offsets: &[u32; 8]) 
             ];
 
             // Unroll all 8 prefetch operations - no branches
-            _mm_prefetch(ptrs[0], L::HINT);
-            _mm_prefetch(ptrs[1], L::HINT);
-            _mm_prefetch(ptrs[2], L::HINT);
-            _mm_prefetch(ptrs[3], L::HINT);
-            _mm_prefetch(ptrs[4], L::HINT);
-            _mm_prefetch(ptrs[5], L::HINT);
-            _mm_prefetch(ptrs[6], L::HINT);
-            _mm_prefetch(ptrs[7], L::HINT);
+            match L::HINT {
+                0 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[1], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[2], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[3], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[4], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[5], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[6], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[7], _MM_HINT_NTA);
+                }
+                1 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T2);
+                }
+                2 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T1);
+                }
+                3 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T0);
+                }
+                _ => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T0);
+                }
+            }
         }
     }
 
@@ -301,14 +352,58 @@ pub fn prefetch_eight_masked<T, L: CacheLevel>(base: &T, offsets: [u32; 8], mask
             ];
 
             // Unroll all 8 prefetch operations - consistent timing
-            _mm_prefetch(ptrs[0], L::HINT);
-            _mm_prefetch(ptrs[1], L::HINT);
-            _mm_prefetch(ptrs[2], L::HINT);
-            _mm_prefetch(ptrs[3], L::HINT);
-            _mm_prefetch(ptrs[4], L::HINT);
-            _mm_prefetch(ptrs[5], L::HINT);
-            _mm_prefetch(ptrs[6], L::HINT);
-            _mm_prefetch(ptrs[7], L::HINT);
+            match L::HINT {
+                0 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[1], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[2], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[3], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[4], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[5], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[6], _MM_HINT_NTA);
+                    _mm_prefetch(ptrs[7], _MM_HINT_NTA);
+                }
+                1 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T2);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T2);
+                }
+                2 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T1);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T1);
+                }
+                3 => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T0);
+                }
+                _ => {
+                    _mm_prefetch(ptrs[0], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[1], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[2], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[3], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[4], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[5], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[6], _MM_HINT_T0);
+                    _mm_prefetch(ptrs[7], _MM_HINT_T0);
+                }
+            }
         }
     }
 
