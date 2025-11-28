@@ -81,11 +81,11 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             // Try prefetching lookup table entries with L3 cache level
             // NOTE: the below compiles down to nothing in release mode, as Rust can prove the below is statically
             //       safe with no need for bounds checking.
-            let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
-            let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
+            // let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
+            // let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
 
-            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], first_half);
-            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], second_half);
+            // prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], first_half);
+            // prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], second_half);
 
             // Get looked up values using centralized function
             let values = lookup_from_offsets(&self.lookup_table, chunk);
