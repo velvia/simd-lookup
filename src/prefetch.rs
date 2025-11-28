@@ -118,7 +118,7 @@ pub fn prefetch_address<T, L: CacheLevel>(base: &T, offset: u32) {
     }
 }
 
-/// Prefetch eight memory addresses at once for the specified cache level
+/// Prefetch eight memory addresses at once using offsets from a base pointer
 ///
 /// This function takes a base pointer and an array of 8 offsets, then prefetches
 /// each calculated address. The prefetch operations are unrolled for maximum
@@ -132,7 +132,7 @@ pub fn prefetch_address<T, L: CacheLevel>(base: &T, offset: u32) {
 /// * `T` - The type of the base data structure
 /// * `L` - Cache level implementing the `CacheLevel` trait
 #[inline(always)]
-pub fn prefetch_eight_addresses<T, L: CacheLevel>(base: &T, offsets: &[u32; 8]) {
+pub fn prefetch_eight_offsets<T, L: CacheLevel>(base: &T, offsets: &[u32; 8]) {
     let base_ptr = base as *const T;
 
     #[cfg(target_arch = "x86_64")]
@@ -490,6 +490,93 @@ pub fn prefetch_eight_masked<T, L: CacheLevel>(base: &T, offsets: [u32; 8], mask
     }
 }
 
+/// Prefetch sixteen memory addresses directly from computed u64x8 vectors
+///
+/// This function takes two u64x8 vectors containing pre-computed memory addresses
+/// and prefetches all 16 addresses. This avoids redundant address calculations
+/// when addresses have already been computed for other purposes (e.g., lookups).
+///
+/// # Arguments
+/// * `addresses` - Tuple of two u64x8 vectors containing 16 memory addresses
+///
+/// # Type Parameters
+/// * `L` - Cache level implementing the `CacheLevel` trait
+#[inline(always)]
+pub fn prefetch_sixteen_addresses<L: CacheLevel>(addresses: (wide::u64x8, wide::u64x8)) {
+    let (first_addrs, second_addrs) = addresses;
+    let first_array = first_addrs.to_array();
+    let second_array = second_addrs.to_array();
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::*;
+        unsafe {
+            _mm_prefetch(first_array[0] as *const i8, L::HINT);
+            _mm_prefetch(first_array[1] as *const i8, L::HINT);
+            _mm_prefetch(first_array[2] as *const i8, L::HINT);
+            _mm_prefetch(first_array[3] as *const i8, L::HINT);
+            _mm_prefetch(first_array[4] as *const i8, L::HINT);
+            _mm_prefetch(first_array[5] as *const i8, L::HINT);
+            _mm_prefetch(first_array[6] as *const i8, L::HINT);
+            _mm_prefetch(first_array[7] as *const i8, L::HINT);
+            _mm_prefetch(second_array[0] as *const i8, L::HINT);
+            _mm_prefetch(second_array[1] as *const i8, L::HINT);
+            _mm_prefetch(second_array[2] as *const i8, L::HINT);
+            _mm_prefetch(second_array[3] as *const i8, L::HINT);
+            _mm_prefetch(second_array[4] as *const i8, L::HINT);
+            _mm_prefetch(second_array[5] as *const i8, L::HINT);
+            _mm_prefetch(second_array[6] as *const i8, L::HINT);
+            _mm_prefetch(second_array[7] as *const i8, L::HINT);
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe {
+            std::arch::asm!(
+                "prfm pldl1strm, [{0}]",
+                "prfm pldl1strm, [{1}]",
+                "prfm pldl1strm, [{2}]",
+                "prfm pldl1strm, [{3}]",
+                "prfm pldl1strm, [{4}]",
+                "prfm pldl1strm, [{5}]",
+                "prfm pldl1strm, [{6}]",
+                "prfm pldl1strm, [{7}]",
+                "prfm pldl1strm, [{8}]",
+                "prfm pldl1strm, [{9}]",
+                "prfm pldl1strm, [{10}]",
+                "prfm pldl1strm, [{11}]",
+                "prfm pldl1strm, [{12}]",
+                "prfm pldl1strm, [{13}]",
+                "prfm pldl1strm, [{14}]",
+                "prfm pldl1strm, [{15}]",
+                in(reg) first_array[0] as *const u8,
+                in(reg) first_array[1] as *const u8,
+                in(reg) first_array[2] as *const u8,
+                in(reg) first_array[3] as *const u8,
+                in(reg) first_array[4] as *const u8,
+                in(reg) first_array[5] as *const u8,
+                in(reg) first_array[6] as *const u8,
+                in(reg) first_array[7] as *const u8,
+                in(reg) second_array[0] as *const u8,
+                in(reg) second_array[1] as *const u8,
+                in(reg) second_array[2] as *const u8,
+                in(reg) second_array[3] as *const u8,
+                in(reg) second_array[4] as *const u8,
+                in(reg) second_array[5] as *const u8,
+                in(reg) second_array[6] as *const u8,
+                in(reg) second_array[7] as *const u8,
+            );
+        }
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        // No-op for unsupported architectures
+        let _ = (first_array, second_array);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,10 +607,10 @@ mod tests {
         let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 
         // These should not panic or crash
-        prefetch_eight_addresses::<_, NTA>(&data, &offsets);
-        prefetch_eight_addresses::<_, L1>(&data, &offsets);
-        prefetch_eight_addresses::<_, L2>(&data, &offsets);
-        prefetch_eight_addresses::<_, L3>(&data, &offsets);
+        prefetch_eight_offsets::<_, NTA>(&data, &offsets);
+        prefetch_eight_offsets::<_, L1>(&data, &offsets);
+        prefetch_eight_offsets::<_, L2>(&data, &offsets);
+        prefetch_eight_offsets::<_, L3>(&data, &offsets);
     }
 
     #[test]
@@ -548,9 +635,9 @@ mod tests {
 
         let offsets = [1, 2, 3, 4, 5, 6, 7, 8];
 
-        prefetch_eight_addresses::<_, L1>(&u32_data, &offsets);
-        prefetch_eight_addresses::<_, L1>(&u64_data, &offsets);
-        prefetch_eight_addresses::<_, L1>(&f32_data, &offsets);
+        prefetch_eight_offsets::<_, L1>(&u32_data, &offsets);
+        prefetch_eight_offsets::<_, L1>(&u64_data, &offsets);
+        prefetch_eight_offsets::<_, L1>(&f32_data, &offsets);
 
         prefetch_eight_masked::<_, L1>(&u32_data, offsets, 0xFF);
         prefetch_eight_masked::<_, L1>(&u64_data, offsets, 0xAA);
