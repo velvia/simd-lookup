@@ -322,7 +322,7 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             for i in 0..16 {
                 if values1[i] != 0 {
                     // Prefetch this specific table2 address with NTA to avoid cache pollution
-                    prefetch_address::<_, NTA>(&self.lookup_table2[0], chunk2[i]);
+                    prefetch_address::<_, L3>(&self.lookup_table2[0], chunk2[i]);
 
                     values2[i] = self.lookup_table2[chunk2[i] as usize];
                 }
@@ -449,8 +449,8 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (8..16).rev() {
                 result_high <<= 8;
                 if vocab1_array[j] != 0 {
-                    // Prefetch this specific table2 address with NTA to avoid cache pollution
-                    prefetch_address::<_, NTA>(&self.lookup2[0], local_chunk[j]);
+                    // Prefetch this specific table2 address with L3 to avoid cache pollution
+                    prefetch_address::<_, L3>(&self.lookup2[0], local_chunk[j]);
 
                     result_high += self.lookup2[local_chunk[j] as usize] as u64;
                 }
@@ -461,8 +461,8 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (0..8).rev() {
                 result_low <<= 8;
                 if vocab1_array[j] != 0 {
-                    // Prefetch this specific table2 address with NTA to avoid cache pollution
-                    prefetch_address::<_, NTA>(&self.lookup2[0], local_chunk[j]);
+                    // Prefetch this specific table2 address with L3 to avoid cache pollution
+                    prefetch_address::<_, L3>(&self.lookup2[0], local_chunk[j]);
 
                     result_low += self.lookup2[local_chunk[j] as usize] as u64;
                 }
