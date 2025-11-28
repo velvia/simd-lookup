@@ -5,6 +5,7 @@ pub mod entropy_map_lookup;
 pub mod lookup;
 pub mod lookup_kernel;
 pub mod prefetch;
+pub mod simd_compress;
 pub mod table64;
 pub mod wide_utils;
 
@@ -15,7 +16,13 @@ pub use lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
 pub use lookup_kernel::{
     PipelinedSingleVocabU32U8Lookup, SimdDualVocabWithHashLookup, SimdJoinedDualVocabU32U8Lookup,
 };
-pub use wide_utils::{FromBitmask, WideUtilsExt};
+pub use simd_compress::{
+    compress_store_u32x8, compress_store_u32x16, compress_store_u8x16,
+    compress_u32x8, compress_u32x16, compress_u8x16,
+};
+pub use wide_utils::{
+    FromBitmask, SimdSplit, WideUtilsExt,
+};
 
 #[cfg(test)]
 mod tests {
