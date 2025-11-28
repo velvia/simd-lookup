@@ -12,6 +12,7 @@ pub mod wide_utils;
 pub use eight_value_lookup::EightValueLookup;
 pub use entropy_map_lookup::{EntropyMapBitpackedLookup, EntropyMapLookup};
 pub use lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
+pub use lookup_kernel::PipelinedSingleVocabU32U8Lookup;
 pub use wide_utils::{FromBitmask, WideUtilsExt};
 
 #[cfg(test)]

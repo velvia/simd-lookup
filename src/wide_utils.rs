@@ -171,13 +171,13 @@ unsafe fn widen_u32x8_to_u64x8_avx2(input: u32x8) -> u64x8 {
     unsafe {
         let raw = std::mem::transmute::<u32x8, __m256i>(input);
 
-    // Split into two 128-bit halves
-    let low = _mm256_extracti128_si256(raw, 0);
-    let high = _mm256_extracti128_si256(raw, 1);
+        // Split into two 128-bit halves
+        let low = _mm256_extracti128_si256(raw, 0);
+        let high = _mm256_extracti128_si256(raw, 1);
 
-    // Widen each half
-    let low_wide = _mm256_cvtepu32_epi64(low);
-    let high_wide = _mm256_cvtepu32_epi64(high);
+        // Widen each half
+        let low_wide = _mm256_cvtepu32_epi64(low);
+        let high_wide = _mm256_cvtepu32_epi64(high);
 
         // Combine into 512-bit result (we'll use two 256-bit operations)
         // For now, let's create the result array manually

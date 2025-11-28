@@ -4,6 +4,7 @@ use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 use simd_lookup::lookup_kernel::{
     SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup,
 };
+use simd_lookup::PipelinedSingleVocabU32U8Lookup;
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
 /// Returns Vec<(u32, u8)> entries that can be converted to a lookup table
@@ -68,6 +69,45 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     let test_values = create_test_values(num_values, table_size);
 
     let mut group = c.benchmark_group("single_vocab_lookup");
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    group.bench_function("chunks_of_500", |b| {
+        // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
+        let mut result_vec = Vec::with_capacity(num_values);
+        b.iter(|| {
+            // Reset the vec for each iteration
+            result_vec.clear();
+            // Process in chunks of 500
+            for chunk in test_values.chunks_exact(500) {
+                lookup.lookup_into_vec(black_box(chunk), &mut result_vec);
+            }
+            black_box(&result_vec);
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark PipelinedSingleVocabU32U8Lookup with chunks of 500
+/// Uses the same parameters as single_vocab_lookup for direct comparison
+fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
+    let table_size = 15_000_000;
+    let density = 20.0; // 20% density
+
+    println!(
+        "Creating pipelined lookup table: {} entries, {}% density",
+        table_size, density
+    );
+    // Use the same table creation method as batch_lookup benchmark
+    let entries = create_sparse_entries_for_kernel(table_size, density);
+    let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
+    let lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+
+    // Create 1 million test values (divisible by 500)
+    let num_values = 1_000_000;
+    let test_values = create_test_values(num_values, table_size);
+
+    let mut group = c.benchmark_group("pipelined_single_vocab_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
     group.bench_function("chunks_of_500", |b| {
@@ -293,6 +333,7 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_single_vocab_lookup,
+    bench_pipelined_single_vocab_lookup,
     bench_dual_vocab_lookup,
     bench_dual_vocab_lookup_v2,
     bench_dual_vocab_lookup_v2_simple

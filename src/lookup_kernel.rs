@@ -12,7 +12,10 @@
 
 use wide::u8x16;
 
-use crate::{bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender}, prefetch::{self, prefetch_eight_addresses}};
+use crate::{
+    bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender},
+    prefetch::{self, prefetch_eight_addresses},
+};
 
 /// Single vocabulary lookup kernel - u32 to u8 lookup table kernel
 /// The user is responsible for generating the lookup table - so this can be used for different use cases, including
@@ -52,10 +55,9 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
             //       safe with no need for bounds checking.
             let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
             let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
-            prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], first_half);
-            prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], second_half);
-            // prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], first_half);
-            // prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], second_half);
+            // NOTE: NTA is much slower than L3 prefetch.
+            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], first_half);
+            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], second_half);
 
             // Get looked up values - LLVM should be able to auto-vectorize this
             let mut values = [0u8; 16];
@@ -128,6 +130,133 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
         let needed = values.len().div_ceil(16);
         let mut guard = vec.bulk_extend_guard(needed);
         self.lookup_into_u8x16_buffer(values, guard.as_mut_slice());
+        // guard drops here, automatically finalizes to correct length
+    }
+}
+
+/// Pipelined single vocabulary lookup kernel - u32 to u8 lookup table kernel with prefetch pipelining
+///
+/// This version pipelines prefetch operations with the actual lookup work to hide memory latency.
+/// The algorithm works as follows:
+/// 1. Read values from current chunk addresses
+/// 2. Prefetch next chunk addresses while processing current values
+/// 3. Call SIMD lookup function on current values
+/// 4. Loop to next chunk
+///
+/// This pipelining allows memory prefetch latency to be hidden behind computation work.
+#[derive(Debug, Clone)]
+pub struct PipelinedSingleVocabU32U8Lookup<'a> {
+    lookup_table: &'a [u8],
+}
+
+impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
+    #[inline]
+    pub fn new(lookup_table: &'a [u8]) -> Self {
+        Self { lookup_table }
+    }
+
+    /// Pipelined lookup function that prefetches the next chunk while processing the current one
+    ///
+    /// The pipelining strategy:
+    /// - Process chunks of 16 u32 values at a time
+    /// - For each chunk: prefetch next chunk addresses, then process current chunk
+    /// - This hides prefetch latency behind the lookup computation work
+    #[inline]
+    pub fn lookup_func<F>(&self, values: &[u32], f: &mut F)
+    where
+        F: FnMut(u8x16, usize),
+    {
+        let (chunks, rest) = values.as_chunks::<16>();
+
+        if chunks.is_empty() {
+            // Handle case where we have fewer than 16 values total
+            if !rest.is_empty() {
+                self.process_remainder(rest, f);
+            }
+            return;
+        }
+
+        // Process first chunk without prefetching (nothing to prefetch yet)
+        let mut current_chunk = chunks[0];
+
+        // Pipeline: for each chunk, prefetch next while processing current
+        for (_, &next_chunk) in chunks.iter().enumerate().skip(1) {
+            // Prefetch next chunk addresses while we process current chunk
+            let next_first_half: &[u32; 8] = next_chunk[..8].try_into().unwrap();
+            let next_second_half: &[u32; 8] = next_chunk[8..].try_into().unwrap();
+
+            use crate::prefetch::{L3, prefetch_eight_addresses};
+            prefetch_eight_addresses::<_, L3>(&self.lookup_table[0], next_first_half);
+            prefetch_eight_addresses::<_, L3>(&self.lookup_table[0], next_second_half);
+
+            // Process current chunk while prefetches are in flight
+            self.process_chunk(&current_chunk, f);
+
+            // Move to next chunk
+            current_chunk = next_chunk;
+        }
+
+        // Process the last chunk (no more chunks to prefetch)
+        self.process_chunk(&current_chunk, f);
+
+        // Handle remainder
+        if !rest.is_empty() {
+            self.process_remainder(rest, f);
+        }
+    }
+
+    /// Process a single 16-element chunk
+    #[inline]
+    fn process_chunk<F>(&self, chunk: &[u32; 16], f: &mut F)
+    where
+        F: FnMut(u8x16, usize),
+    {
+        // Perform the actual lookups - this work happens while next prefetches are in flight
+        let mut values = [0u8; 16];
+        values[0] = self.lookup_table[chunk[0] as usize];
+        values[1] = self.lookup_table[chunk[1] as usize];
+        values[2] = self.lookup_table[chunk[2] as usize];
+        values[3] = self.lookup_table[chunk[3] as usize];
+        values[4] = self.lookup_table[chunk[4] as usize];
+        values[5] = self.lookup_table[chunk[5] as usize];
+        values[6] = self.lookup_table[chunk[6] as usize];
+        values[7] = self.lookup_table[chunk[7] as usize];
+        values[8] = self.lookup_table[chunk[8] as usize];
+        values[9] = self.lookup_table[chunk[9] as usize];
+        values[10] = self.lookup_table[chunk[10] as usize];
+        values[11] = self.lookup_table[chunk[11] as usize];
+        values[12] = self.lookup_table[chunk[12] as usize];
+        values[13] = self.lookup_table[chunk[13] as usize];
+        values[14] = self.lookup_table[chunk[14] as usize];
+        values[15] = self.lookup_table[chunk[15] as usize];
+
+        (f)(u8x16::from(values), 16);
+    }
+
+    /// Process remainder elements (< 16 elements)
+    #[inline]
+    fn process_remainder<F>(&self, rest: &[u32], f: &mut F)
+    where
+        F: FnMut(u8x16, usize),
+    {
+        let mut values = [0u8; 16];
+        for i in 0..rest.len() {
+            values[i] = self.lookup_table[rest[i] as usize];
+        }
+        (f)(u8x16::from(values), rest.len());
+    }
+
+    /// Convenience function which does lookup and writes the results into a Vec
+    #[inline]
+    pub fn lookup_into_vec(&self, values: &[u32], buffer: &mut Vec<u8>) {
+        let mut write_guard = buffer.bulk_extend_guard(values.len());
+        let write_slice = write_guard.as_mut_slice();
+        let mut num_written = 0;
+        self.lookup_func(values, &mut |lookedup_values, num_bytes| {
+            let target_slice = &mut write_slice[num_written..num_written + num_bytes];
+            target_slice.copy_from_slice(&lookedup_values.to_array()[..num_bytes]);
+            num_written += num_bytes;
+        });
         // guard drops here, automatically finalizes to correct length
     }
 }
@@ -363,6 +492,84 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pipelined_single_vocab_lookup_basic() {
+        // Create a simple lookup table: index -> index as u8
+        let lookup_table: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+
+        // Test with exactly 16 values (one chunk)
+        let values = vec![
+            10u32, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+        ];
+        let mut results = Vec::new();
+        pipelined_lookup.lookup_func(&values, &mut |lookedup_values, num_bytes| {
+            let array = lookedup_values.to_array();
+            results.extend_from_slice(&array[..num_bytes]);
+        });
+
+        let expected: Vec<u8> = values.iter().map(|&v| v as u8).collect();
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn test_pipelined_single_vocab_lookup_multiple_chunks() {
+        // Create a simple lookup table
+        let lookup_table: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+
+        // Test with 35 values (2 full chunks + 3 remainder)
+        let values: Vec<u32> = (1..36).collect();
+        let mut results = Vec::new();
+        pipelined_lookup.lookup_func(&values, &mut |lookedup_values, num_bytes| {
+            let array = lookedup_values.to_array();
+            results.extend_from_slice(&array[..num_bytes]);
+        });
+
+        let expected: Vec<u8> = values.iter().map(|&v| v as u8).collect();
+        assert_eq!(results, expected);
+    }
+
+    #[test]
+    fn test_pipelined_single_vocab_lookup_into_vec() {
+        // Create a lookup table where each index maps to its double (mod 256)
+        let lookup_table: Vec<u8> = (0..256).map(|i| ((i * 2) % 256) as u8).collect();
+        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+
+        let values = vec![1u32, 2, 3, 4, 5, 100, 150, 200];
+        let mut buffer = Vec::new();
+        pipelined_lookup.lookup_into_vec(&values, &mut buffer);
+
+        let expected: Vec<u8> = values.iter().map(|&v| ((v * 2) % 256) as u8).collect();
+        assert_eq!(buffer, expected);
+    }
+
+    #[test]
+    fn test_pipelined_vs_original_consistency() {
+        // Test that pipelined version produces same results as original
+        let lookup_table: Vec<u8> = (0..256).map(|i| (i ^ 0xAA) as u8).collect();
+
+        let original_lookup = SimdSingleVocabU32U8Lookup::new(&lookup_table);
+        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+
+        // Test with various sizes
+        for size in [5, 16, 17, 32, 33, 100] {
+            let values: Vec<u32> = (0..size).map(|i| (i * 7) % 256).collect();
+
+            let mut original_results = Vec::new();
+            original_lookup.lookup_into_vec(&values, &mut original_results);
+
+            let mut pipelined_results = Vec::new();
+            pipelined_lookup.lookup_into_vec(&values, &mut pipelined_results);
+
+            assert_eq!(
+                original_results, pipelined_results,
+                "Results differ for size {}",
+                size
+            );
+        }
+    }
 
     #[test]
     fn test_single_vocab_lookup_into_vec() {
