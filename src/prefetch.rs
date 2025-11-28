@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefetch_eight_offsets() {
+    fn test_prefetch_eight_addresses() {
         let data = vec![0u32; 100];
         let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 

@@ -51,6 +51,7 @@ fn create_test_values(num_values: usize, max_index: usize) -> Vec<u32> {
 }
 
 /// Benchmark SimdSingleVocabU32U8Lookup with chunks of 500
+/// Compares simple (direct write) vs complex (filter zeros and track indices) lookup functions
 fn bench_single_vocab_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
@@ -71,7 +72,8 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_vocab_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
-    group.bench_function("chunks_of_500", |b| {
+    // Simple version: direct write to Vec
+    group.bench_function("chunks_of_500_simple", |b| {
         // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
         let mut result_vec = Vec::with_capacity(num_values);
         b.iter(|| {
@@ -85,10 +87,37 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
         })
     });
 
+    // Complex version: filter zeros and track indices
+    group.bench_function("chunks_of_500_complex", |b| {
+        let mut result_vec = Vec::new();
+        let mut indices_vec = Vec::new();
+        b.iter(|| {
+            result_vec.clear();
+            indices_vec.clear();
+            let mut global_idx = 0;
+            // Process in chunks of 500
+            for chunk in test_values.chunks_exact(500) {
+                lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
+                    let array = lookedup_values.to_array();
+                    for i in 0..num_bytes {
+                        if array[i] != 0 {
+                            result_vec.push(array[i]);
+                            indices_vec.push(global_idx + i);
+                        }
+                    }
+                    global_idx += num_bytes;
+                });
+            }
+            black_box(&result_vec);
+            black_box(&indices_vec);
+        })
+    });
+
     group.finish();
 }
 
 /// Benchmark PipelinedSingleVocabU32U8Lookup with chunks of 500
+/// Compares simple (direct write) vs complex (filter zeros and track indices) lookup functions
 /// Uses the same parameters as single_vocab_lookup for direct comparison
 fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
@@ -110,7 +139,8 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
     let mut group = c.benchmark_group("pipelined_single_vocab_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
-    group.bench_function("chunks_of_500", |b| {
+    // Simple version: direct write to Vec
+    group.bench_function("chunks_of_500_simple", |b| {
         // Pre-allocate to avoid repeated reserve() calls (2000 calls for 1M elements in chunks of 500)
         let mut result_vec = Vec::with_capacity(num_values);
         b.iter(|| {
@@ -121,6 +151,32 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
                 lookup.lookup_into_vec(black_box(chunk), &mut result_vec);
             }
             black_box(&result_vec);
+        })
+    });
+
+    // Complex version: filter zeros and track indices
+    group.bench_function("chunks_of_500_complex", |b| {
+        let mut result_vec = Vec::new();
+        let mut indices_vec = Vec::new();
+        b.iter(|| {
+            result_vec.clear();
+            indices_vec.clear();
+            let mut global_idx = 0;
+            // Process in chunks of 500
+            for chunk in test_values.chunks_exact(500) {
+                lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
+                    let array = lookedup_values.to_array();
+                    for i in 0..num_bytes {
+                        if array[i] != 0 {
+                            result_vec.push(array[i]);
+                            indices_vec.push(global_idx + i);
+                        }
+                    }
+                    global_idx += num_bytes;
+                });
+            }
+            black_box(&result_vec);
+            black_box(&indices_vec);
         })
     });
 
@@ -219,6 +275,8 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("nonzero_filter", size_label), |b| {
             b.iter(|| {
                 let mut result_vec = Vec::new();
+                let mut indices_vec = Vec::new();
+                let mut global_idx = 0;
                 // Process in chunks of 500
                 for (chunk1, chunk2) in test_values1
                     .chunks_exact(chunk_size)
@@ -231,25 +289,29 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                     lookup.lookup_func(
                         black_box(chunk1),
                         black_box(chunk2),
-                        &mut |v1, v2, _num_bytes| {
+                        &mut |v1, v2, num_bytes| {
                             // AND the two u8x16 values
                             let combined = v1 & v2;
                             let combined_array = combined.as_array();
 
-                            // Write any nonzero u8's into the slice. Using the extend_guard() lets us optimize
-                            // and use faster writes, and avoid the overhead of pushing to a Vec.
-                            for &val in combined_array.iter() {
+                            // Write any nonzero u8's into the slice and track their indices.
+                            // Using the extend_guard() lets us optimize and use faster writes,
+                            // and avoid the overhead of pushing to a Vec.
+                            for (i, &val) in combined_array.iter().enumerate().take(num_bytes) {
                                 if val != 0 {
                                     write_slice[num_written] = val;
+                                    indices_vec.push(global_idx + i);
                                     num_written += 1;
                                 }
                             }
+                            global_idx += num_bytes;
                         },
                     );
 
                     guard.set_written(num_written);
                 }
                 black_box(&result_vec);
+                black_box(&indices_vec);
             })
         });
     }
