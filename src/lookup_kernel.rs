@@ -12,7 +12,7 @@
 
 use wide::u8x16;
 
-use crate::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
+use crate::{bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender}, prefetch::{self, prefetch_eight_addresses}};
 
 /// Single vocabulary lookup kernel - u32 to u8 lookup table kernel
 /// The user is responsible for generating the lookup table - so this can be used for different use cases, including
@@ -47,6 +47,16 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     {
         let (chunks, rest) = values.as_chunks::<16>();
         for chunk in chunks {
+            // Try prefetching lookup table entries with NTA cache level- no caching and therefore no cache thrashing!
+            // NOTE: the below compiles down to nothing in release mode, as Rust can prove the below is statically
+            //       safe with no need for bounds checking.
+            let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
+            let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
+            // prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], first_half);
+            // prefetch_eight_addresses::<_, prefetch::NTA>(&self.lookup_table[0], second_half);
+            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], first_half);
+            prefetch_eight_addresses::<_, prefetch::L3>(&self.lookup_table[0], second_half);
+
             // Get looked up values - LLVM should be able to auto-vectorize this
             let mut values = [0u8; 16];
             values[0] = self.lookup_table[chunk[0] as usize];

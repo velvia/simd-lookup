@@ -317,16 +317,19 @@ unsafe fn u32x8_from_bitmask_neon(mask: u8) -> u32x8 {
 // Scalar Fallback Implementations
 // =============================================================================
 
+#[allow(dead_code)]
 fn widen_u32x8_to_u64x8_scalar(input: u32x8) -> u64x8 {
     let array = input.to_array();
     u64x8::from(array.map(|x| x as u64))
 }
 
+#[allow(dead_code)]
 fn widen_u32x4_to_u64x4_scalar(input: u32x4) -> u64x4 {
     let array = input.to_array();
     u64x4::from(array.map(|x| x as u64))
 }
 
+#[allow(dead_code)]
 fn u64x8_from_bitmask_scalar(mask: u8) -> u64x8 {
     let mut values = [0u64; 8];
     for (i, value) in values.iter_mut().enumerate() {
@@ -335,6 +338,7 @@ fn u64x8_from_bitmask_scalar(mask: u8) -> u64x8 {
     u64x8::from(values)
 }
 
+#[allow(dead_code)]
 fn u32x8_from_bitmask_scalar(mask: u8) -> u32x8 {
     let mut values = [0u32; 8];
     for (i, value) in values.iter_mut().enumerate() {

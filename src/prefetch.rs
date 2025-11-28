@@ -22,7 +22,7 @@
 //! let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 //!
 //! // Prefetch 8 addresses for L1 cache
-//! prefetch_eight_addresses::<_, L1>(&data, offsets);
+//! prefetch_eight_addresses::<_, L1>(&data, &offsets);
 //!
 //! // Prefetch with mask - only prefetch where mask bit is 1
 //! let mask = 0b10101010; // prefetch offsets[1], [3], [5], [7]
@@ -125,7 +125,7 @@ pub fn prefetch_address<T, L: CacheLevel>(base: &T, offset: u32) {
 /// * `T` - The type of the base data structure
 /// * `L` - Cache level implementing the `CacheLevel` trait
 #[inline(always)]
-pub fn prefetch_eight_addresses<T, L: CacheLevel>(base: &T, offsets: [u32; 8]) {
+pub fn prefetch_eight_addresses<T, L: CacheLevel>(base: &T, offsets: &[u32; 8]) {
     let base_ptr = base as *const T;
 
     #[cfg(target_arch = "x86_64")]
@@ -425,10 +425,10 @@ mod tests {
         let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 
         // These should not panic or crash
-        prefetch_eight_addresses::<_, NTA>(&data, offsets);
-        prefetch_eight_addresses::<_, L1>(&data, offsets);
-        prefetch_eight_addresses::<_, L2>(&data, offsets);
-        prefetch_eight_addresses::<_, L3>(&data, offsets);
+        prefetch_eight_addresses::<_, NTA>(&data, &offsets);
+        prefetch_eight_addresses::<_, L1>(&data, &offsets);
+        prefetch_eight_addresses::<_, L2>(&data, &offsets);
+        prefetch_eight_addresses::<_, L3>(&data, &offsets);
     }
 
     #[test]
@@ -453,9 +453,9 @@ mod tests {
 
         let offsets = [1, 2, 3, 4, 5, 6, 7, 8];
 
-        prefetch_eight_addresses::<_, L1>(&u32_data, offsets);
-        prefetch_eight_addresses::<_, L1>(&u64_data, offsets);
-        prefetch_eight_addresses::<_, L1>(&f32_data, offsets);
+        prefetch_eight_addresses::<_, L1>(&u32_data, &offsets);
+        prefetch_eight_addresses::<_, L1>(&u64_data, &offsets);
+        prefetch_eight_addresses::<_, L1>(&f32_data, &offsets);
 
         prefetch_eight_masked::<_, L1>(&u32_data, offsets, 0xFF);
         prefetch_eight_masked::<_, L1>(&u64_data, offsets, 0xAA);
