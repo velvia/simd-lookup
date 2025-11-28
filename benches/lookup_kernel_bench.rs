@@ -97,16 +97,24 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
             let mut global_idx = 0;
             // Process in chunks of 500
             for chunk in test_values.chunks_exact(500) {
+                let mut result_guard = result_vec.bulk_extend_guard(chunk.len());
+                let result_slice = result_guard.as_mut_slice();
+                let mut indices_guard = indices_vec.bulk_extend_guard(chunk.len());
+                let indices_slice = indices_guard.as_mut_slice();
+                let mut num_written = 0;
                 lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
                     let array = lookedup_values.to_array();
                     for i in 0..num_bytes {
                         if array[i] != 0 {
-                            result_vec.push(array[i]);
-                            indices_vec.push(global_idx + i);
+                            result_slice[num_written] = array[i];
+                            indices_slice[num_written] = (global_idx + i) as u32;
+                            num_written += 1;
                         }
                     }
                     global_idx += num_bytes;
                 });
+                result_guard.set_written(num_written);
+                indices_guard.set_written(num_written);
             }
             black_box(&result_vec);
             black_box(&indices_vec);
@@ -154,7 +162,7 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
         })
     });
 
-    // Complex version: filter zeros and track indices
+    // Complex version: filter zeros and track indices (using BulkVecExtender)
     group.bench_function("chunks_of_500_complex", |b| {
         let mut result_vec = Vec::new();
         let mut indices_vec = Vec::new();
@@ -164,16 +172,24 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
             let mut global_idx = 0;
             // Process in chunks of 500
             for chunk in test_values.chunks_exact(500) {
+                let mut result_guard = result_vec.bulk_extend_guard(chunk.len());
+                let result_slice = result_guard.as_mut_slice();
+                let mut indices_guard = indices_vec.bulk_extend_guard(chunk.len());
+                let indices_slice = indices_guard.as_mut_slice();
+                let mut num_written = 0;
                 lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
                     let array = lookedup_values.to_array();
                     for i in 0..num_bytes {
                         if array[i] != 0 {
-                            result_vec.push(array[i]);
-                            indices_vec.push(global_idx + i);
+                            result_slice[num_written] = array[i];
+                            indices_slice[num_written] = (global_idx + i) as u32;
+                            num_written += 1;
                         }
                     }
                     global_idx += num_bytes;
                 });
+                result_guard.set_written(num_written);
+                indices_guard.set_written(num_written);
             }
             black_box(&result_vec);
             black_box(&indices_vec);
@@ -274,16 +290,18 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
 
         group.bench_function(BenchmarkId::new("nonzero_filter", size_label), |b| {
             b.iter(|| {
-                let mut result_vec = Vec::new();
-                let mut indices_vec = Vec::new();
-                let mut global_idx = 0;
+                let mut result_vec: Vec<u8> = Vec::new();
+                let mut indices_vec: Vec<u32> = Vec::new();
+                let mut global_idx = 0usize;
                 // Process in chunks of 500
                 for (chunk1, chunk2) in test_values1
                     .chunks_exact(chunk_size)
                     .zip(test_values2.chunks_exact(chunk_size))
                 {
-                    let mut guard = result_vec.bulk_extend_guard(chunk1.len());
-                    let write_slice = guard.as_mut_slice();
+                    let mut result_guard = result_vec.bulk_extend_guard(chunk1.len());
+                    let result_slice = result_guard.as_mut_slice();
+                    let mut indices_guard = indices_vec.bulk_extend_guard(chunk1.len());
+                    let indices_slice = indices_guard.as_mut_slice();
                     let mut num_written = 0;
 
                     lookup.lookup_func(
@@ -299,8 +317,8 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                             // and avoid the overhead of pushing to a Vec.
                             for (i, &val) in combined_array.iter().enumerate().take(num_bytes) {
                                 if val != 0 {
-                                    write_slice[num_written] = val;
-                                    indices_vec.push(global_idx + i);
+                                    result_slice[num_written] = val;
+                                    indices_slice[num_written] = (global_idx + i) as u32;
                                     num_written += 1;
                                 }
                             }
@@ -308,7 +326,8 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                         },
                     );
 
-                    guard.set_written(num_written);
+                    result_guard.set_written(num_written);
+                    indices_guard.set_written(num_written);
                 }
                 black_box(&result_vec);
                 black_box(&indices_vec);
