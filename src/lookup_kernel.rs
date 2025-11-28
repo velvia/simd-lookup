@@ -20,12 +20,11 @@ use crate::{
 };
 
 /// Lookup values from lookup table using u32 offsets
-/// Returns the looked up u8 values as a u8x16
+/// Returns the looked up u8 values as a [u8; 16] array
 /// This centralizes the lookup logic and avoids code duplication
 #[inline]
-fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> u8x16 {
-    // Perform lookups directly using simple indexing - fast and efficient
-    let values = [
+fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> [u8; 16] {
+    [
         lookup_table[offsets[0] as usize],
         lookup_table[offsets[1] as usize],
         lookup_table[offsets[2] as usize],
@@ -42,9 +41,7 @@ fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> u8x16 {
         lookup_table[offsets[13] as usize],
         lookup_table[offsets[14] as usize],
         lookup_table[offsets[15] as usize],
-    ];
-
-    u8x16::from(values)
+    ]
 }
 
 /// Single vocabulary lookup kernel - u32 to u8 lookup table kernel
@@ -91,7 +88,7 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
 
             // Get looked up values using centralized function
             let values = lookup_from_offsets(&self.lookup_table, chunk);
-            (f)(values, 16);
+            (f)(u8x16::from(values), 16);
         }
 
         // Handle the rest... just loop and do a lookup, feed to user function with 0's for items not in the slice.
@@ -204,7 +201,7 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
         if chunks.len() <= PREFETCH_DISTANCE {
             for chunk in chunks {
                 let values = lookup_from_offsets(&self.lookup_table, chunk);
-                (f)(values, 16);
+                (f)(u8x16::from(values), 16);
             }
             if !rest.is_empty() {
                 self.process_remainder(rest, f);
@@ -226,7 +223,7 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
 
             // Process chunk i (which was prefetched PREFETCH_DISTANCE iterations ago)
             let values = lookup_from_offsets(&self.lookup_table, &chunks[i]);
-            (f)(values, 16);
+            (f)(u8x16::from(values), 16);
         }
 
         // Handle remainder
@@ -305,26 +302,11 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
         );
         let (chunks1, rest1) = values1.as_chunks::<16>();
         let (chunks2, rest2) = values2.as_chunks::<16>();
-        for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
-            // Get looked up values - LLVM should be able to auto-vectorize this
-            let mut values1 = [0u8; 16];
-            values1[0] = self.lookup_table1[chunk1[0] as usize];
-            values1[1] = self.lookup_table1[chunk1[1] as usize];
-            values1[2] = self.lookup_table1[chunk1[2] as usize];
-            values1[3] = self.lookup_table1[chunk1[3] as usize];
-            values1[4] = self.lookup_table1[chunk1[4] as usize];
-            values1[5] = self.lookup_table1[chunk1[5] as usize];
-            values1[6] = self.lookup_table1[chunk1[6] as usize];
-            values1[7] = self.lookup_table1[chunk1[7] as usize];
-            values1[8] = self.lookup_table1[chunk1[8] as usize];
-            values1[9] = self.lookup_table1[chunk1[9] as usize];
-            values1[10] = self.lookup_table1[chunk1[10] as usize];
-            values1[11] = self.lookup_table1[chunk1[11] as usize];
-            values1[12] = self.lookup_table1[chunk1[12] as usize];
-            values1[13] = self.lookup_table1[chunk1[13] as usize];
-            values1[14] = self.lookup_table1[chunk1[14] as usize];
-            values1[15] = self.lookup_table1[chunk1[15] as usize];
 
+        for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
+            let values1 = lookup_from_offsets(self.lookup_table1, chunk1);
+
+            // Conditional lookup for table2 - only where table1 is nonzero
             let mut values2 = [0u8; 16];
             for i in 0..16 {
                 if values1[i] != 0 {
@@ -341,7 +323,9 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             let mut values2 = [0u8; 16];
             for i in 0..rest1.len() {
                 values1[i] = self.lookup_table1[rest1[i] as usize];
-                values2[i] = self.lookup_table2[rest2[i] as usize];
+                if values1[i] != 0 {
+                    values2[i] = self.lookup_table2[rest2[i] as usize];
+                }
             }
             (f)(u8x16::from(values1), u8x16::from(values2), rest1.len());
         }
@@ -381,6 +365,114 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
         );
         // write_guard drops here, automatically finalizes to correct length.  We don't have to set final
         // number of bytes since it is the same as the input, which is the default
+    }
+}
+
+/// Dual vocabulary lookup kernel with JOINED/colocated lookup tables.
+///
+/// This kernel tests the hypothesis that TLB swaps or non-colocated tables could be a performance factor.
+/// Instead of two separate lookup tables, it uses a single concatenated table:
+/// - `joined_table` = table1 ++ table2 (concatenated)
+/// - `table2_offset` = where table2 starts in the joined table (= table1.len())
+///
+/// To look up table2, we use: `joined_table[table2_offset + index2]`
+///
+/// The lookup behavior is the same as `SimdDualVocabU32U8Lookup`:
+/// - Table2 is only looked up if table1 returns a non-zero value
+/// - Results are passed to the user function as (u8x16, u8x16, num_bytes)
+#[derive(Debug, Clone)]
+pub struct SimdJoinedDualVocabU32U8Lookup<'a> {
+    joined_table: &'a [u8],
+    table2_offset: u32,
+}
+
+impl<'a> SimdJoinedDualVocabU32U8Lookup<'a> {
+    /// Creates a new joined dual vocabulary lookup kernel.
+    /// - `joined_table`: The concatenated table (table1 ++ table2)
+    /// - `table2_offset`: The offset where table2 starts (typically table1.len())
+    #[inline]
+    pub fn new(joined_table: &'a [u8], table2_offset: usize) -> Self {
+        Self {
+            joined_table,
+            table2_offset: table2_offset as u32,
+        }
+    }
+
+    /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
+    /// on assembled u8x16 results.
+    /// - Table1 indices are used directly: joined_table[index1]
+    /// - Table2 indices are offset: joined_table[table2_offset + index2]
+    /// - Table2 is only looked up if table1 returns a non-zero value
+    #[inline]
+    pub fn lookup_func<F>(&self, values1: &[u32], values2: &[u32], f: &mut F)
+    where
+        F: FnMut(u8x16, u8x16, usize),
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
+        let (chunks1, rest1) = values1.as_chunks::<16>();
+        let (chunks2, rest2) = values2.as_chunks::<16>();
+
+        for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
+            // Lookup table1 directly
+            let values1 = lookup_from_offsets(self.joined_table, chunk1);
+
+            // Conditional lookup for table2 with offset - only where table1 is nonzero
+            let mut values2 = [0u8; 16];
+            for i in 0..16 {
+                if values1[i] != 0 {
+                    values2[i] = self.joined_table[(self.table2_offset + chunk2[i]) as usize];
+                }
+            }
+
+            (f)(u8x16::from(values1), u8x16::from(values2), 16);
+        }
+
+        // Handle the rest
+        if !rest1.is_empty() {
+            let mut values1 = [0u8; 16];
+            let mut values2 = [0u8; 16];
+            for i in 0..rest1.len() {
+                values1[i] = self.joined_table[rest1[i] as usize];
+                if values1[i] != 0 {
+                    values2[i] = self.joined_table[(self.table2_offset + rest2[i]) as usize];
+                }
+            }
+            (f)(u8x16::from(values1), u8x16::from(values2), rest1.len());
+        }
+    }
+
+    /// Convenience function which does dual lookup, combines the results using a user-defined combiner function,
+    /// and extends the combined results into a Vec (pushing all combined results)
+    #[inline]
+    pub fn lookup_into_vec<F>(
+        &self,
+        values1: &[u32],
+        values2: &[u32],
+        output: &mut Vec<u8>,
+        f: &mut F,
+    ) where
+        F: FnMut(u8x16, u8x16) -> u8x16,
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
+
+        let mut write_guard = output.bulk_extend_guard(values1.len());
+        let mut write_slice = write_guard.as_mut_slice();
+        let mut num_written = 0;
+        self.lookup_func(
+            values1,
+            values2,
+            &mut |lookedup_values1, lookedup_values2, num_bytes| {
+                let combined = (f)(lookedup_values1, lookedup_values2);
+                write_slice.write_u8x16(num_written, combined, num_bytes);
+                num_written += num_bytes;
+            },
+        );
     }
 }
 
@@ -537,24 +629,7 @@ impl<'a> SimdDualVocabWithHashLookup<'a> {
         let (chunks2, rest2) = values2.as_chunks::<16>();
 
         for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
-            // Read table1 values
-            let mut values1 = [0u8; 16];
-            values1[0] = self.lookup_table1[chunk1[0] as usize];
-            values1[1] = self.lookup_table1[chunk1[1] as usize];
-            values1[2] = self.lookup_table1[chunk1[2] as usize];
-            values1[3] = self.lookup_table1[chunk1[3] as usize];
-            values1[4] = self.lookup_table1[chunk1[4] as usize];
-            values1[5] = self.lookup_table1[chunk1[5] as usize];
-            values1[6] = self.lookup_table1[chunk1[6] as usize];
-            values1[7] = self.lookup_table1[chunk1[7] as usize];
-            values1[8] = self.lookup_table1[chunk1[8] as usize];
-            values1[9] = self.lookup_table1[chunk1[9] as usize];
-            values1[10] = self.lookup_table1[chunk1[10] as usize];
-            values1[11] = self.lookup_table1[chunk1[11] as usize];
-            values1[12] = self.lookup_table1[chunk1[12] as usize];
-            values1[13] = self.lookup_table1[chunk1[13] as usize];
-            values1[14] = self.lookup_table1[chunk1[14] as usize];
-            values1[15] = self.lookup_table1[chunk1[15] as usize];
+            let values1 = lookup_from_offsets(self.lookup_table1, chunk1);
 
             // Conditional hash lookup for table2 - only where table1 is nonzero
             let mut values2 = [0u8; 16];

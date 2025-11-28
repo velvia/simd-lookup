@@ -5,7 +5,7 @@ use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 // use simd_lookup::entropy_map_lookup::EntropyMapLookup;
 use simd_lookup::lookup_kernel::{
     SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdDualVocabWithHashLookup,
-    SimdSingleVocabU32U8Lookup,
+    SimdJoinedDualVocabU32U8Lookup, SimdSingleVocabU32U8Lookup,
 };
 use simd_lookup::PipelinedSingleVocabU32U8Lookup;
 
@@ -225,6 +225,67 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
     let test_values2 = create_test_values(num_values, table_size);
 
     let mut group = c.benchmark_group("dual_vocab_lookup");
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    group.bench_function("chunks_of_500_bitwise_and", |b| {
+        b.iter(|| {
+            let mut all_results = Vec::new();
+            // Process in chunks of 500
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
+                // Use bitwise AND as the combiner function, but write results to a Vec
+                lookup.lookup_into_vec(
+                    black_box(chunk1),
+                    black_box(chunk2),
+                    &mut all_results,
+                    &mut |v1, v2| v1 & v2,
+                );
+            }
+            black_box(all_results);
+        })
+    });
+
+    group.finish();
+}
+
+/// Benchmark SimdJoinedDualVocabU32U8Lookup - tests colocated/joined lookup tables
+/// to see if TLB swaps or non-colocated tables could be a performance factor.
+fn bench_joined_dual_vocab_lookup(c: &mut Criterion) {
+    let table_size = 15_000_000;
+    let density = 20.0; // 20% density
+
+    println!(
+        "Creating joined dual lookup table: {} entries each, {}% density",
+        table_size, density
+    );
+
+    // Create separate entries for table1 and table2
+    let entries1 = create_sparse_entries_for_kernel(table_size, density);
+    let entries2 = create_sparse_entries_for_kernel(table_size, density);
+    let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
+    let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
+
+    // Create joined table: table1 ++ table2
+    let mut joined_table = lookup_table1.clone();
+    let table2_offset = joined_table.len();
+    joined_table.extend_from_slice(&lookup_table2);
+
+    println!(
+        "Joined table size: {} bytes, table2_offset: {}",
+        joined_table.len(),
+        table2_offset
+    );
+
+    let lookup = SimdJoinedDualVocabU32U8Lookup::new(&joined_table, table2_offset);
+
+    // Create 1 million test values (two sets, divisible by 500)
+    let num_values = 1_000_000;
+    let test_values1 = create_test_values(num_values, table_size);
+    let test_values2 = create_test_values(num_values, table_size);
+
+    let mut group = c.benchmark_group("joined_dual_vocab_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
     group.bench_function("chunks_of_500_bitwise_and", |b| {
@@ -529,6 +590,7 @@ criterion_group!(
     bench_single_vocab_lookup,
     bench_pipelined_single_vocab_lookup,
     bench_dual_vocab_lookup,
+    bench_joined_dual_vocab_lookup,
     bench_dual_vocab_lookup_v2,
     bench_dual_vocab_lookup_v2_simple,
     bench_dual_vocab_with_hash
