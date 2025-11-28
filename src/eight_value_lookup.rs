@@ -187,7 +187,8 @@ impl EightValueLookup {
                 let input_vec = _mm256_loadu_si256(values_array.as_ptr() as *const __m256i);
 
                 let table_values = self.table.to_array();
-                let table_vec = _mm256_loadu_si256(table_values.as_ptr() as *const __m256i);
+                // Note: table_vec loaded for potential future SIMD optimization
+                let _table_vec = _mm256_loadu_si256(table_values.as_ptr() as *const __m256i);
 
                 let mut result = [-1i32; 8];
 

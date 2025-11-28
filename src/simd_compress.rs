@@ -94,7 +94,7 @@ pub fn compress_u32x8(data: u32x8, mask: u8) -> (u32x8, usize) {
 unsafe fn compress_store_u32x8_avx512(data: u32x8, mask: u8, dest: &mut [u32]) {
     unsafe {
         let raw = std::mem::transmute::<u32x8, __m256i>(data);
-        _mm256_mask_compressstoreu_epi32(dest.as_mut_ptr() as *mut i8, mask, raw);
+        _mm256_mask_compressstoreu_epi32(dest.as_mut_ptr() as *mut i32, mask, raw);
     }
 }
 
@@ -175,7 +175,7 @@ pub fn compress_u32x16(data: u32x16, mask: u16) -> (u32x16, usize) {
 unsafe fn compress_store_u32x16_avx512(data: u32x16, mask: u16, dest: &mut [u32]) {
     unsafe {
         let raw = std::mem::transmute::<u32x16, __m512i>(data);
-        _mm512_mask_compressstoreu_epi32(dest.as_mut_ptr() as *mut i8, mask, raw);
+        _mm512_mask_compressstoreu_epi32(dest.as_mut_ptr() as *mut i32, mask, raw);
     }
 }
 

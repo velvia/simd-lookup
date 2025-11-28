@@ -132,12 +132,35 @@ let indices: [u32; 8] = SHUFFLE_COMPRESS_IDX_U32X8[0b10110010];
 let simd_indices = get_compress_indices_u32x8(0b10110010u8);
 ```
 
+## Other Modules
+
+### `table64` — Small Table SIMD Lookup
+64-entry lookup table optimized for NEON `TBL4` and AVX-512 `VPERMB`. Useful for fast pattern detection and small dictionary lookups.
+
+### `prefetch` — SIMD Memory Prefetch
+Cross-platform memory prefetch utilities including masked prefetch for 8 addresses at once. Supports L1/L2/L3 cache hints.
+
+### `lookup_kernel` — High-Performance Lookup Kernels
+Production-ready SIMD lookup kernels for vocabulary/dictionary lookups:
+- `PipelinedSingleVocabU32U8Lookup` — Pipelined single-table lookup with software prefetching
+- `SimdJoinedDualVocabU32U8Lookup` — Dual-table lookup for join-like operations
+- `SimdDualVocabWithHashLookup` — Dual vocab with hash fallback for unknown keys
+
+### `bulk_vec_extender` — Efficient Vec Extension
+Utilities for efficiently extending `Vec` with SIMD-produced results, minimizing bounds checks and reallocations.
+
+### `entropy_map_lookup` — Entropy-Optimized Lookups
+Lookup structures optimized for low-entropy (few unique values) data, using bitpacking and small lookup tables.
+
+### `eight_value_lookup` — 8-Value Fast Path
+Specialized lookup for tables with ≤8 unique values, using SIMD comparison and bitmask extraction.
+
 ## Performance Notes
 
 - **AVX-512**: Native compress instructions are ~3-5× faster than shuffle-based fallback
 - **NEON u32 shuffle**: Uses `TBL`/`TBL2` with byte-level indexing (converts u32 indices to byte offsets)
 - **Lookup tables**: 256×8×4 = 8KB for u32x8 compress indices; fits in L1 cache
-- **SimdSplit**: AVX-512 uses single extract instruction; fallback is array copy (still fast)
+- **SimdSplit**: AVX-512 uses single extract instruction; fallback is zero-cost transmute
 
 ## TODO list
 
