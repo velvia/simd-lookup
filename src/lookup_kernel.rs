@@ -10,62 +10,33 @@
 //! It turns out these don't significantly improve on a series of scalar lookups.  Also, I forgot that we need to
 //! respect the SeriesIndex on input, as that may be used for series/time filtering.  So these don't really work.
 
-use wide::{u8x16, u32x8, u64x8};
+use wide::u8x16;
 
-use crate::{
-    bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender},
-    wide_utils::WideUtilsExt,
-};
+use crate::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 
-/// Calculate real memory addresses from base pointer and u32 offsets using SIMD
-/// Returns two u64x8 vectors containing the actual memory addresses
-/// This avoids repeating address calculations in both lookup and prefetch operations
-#[inline]
-fn calc_real_addresses<T>(base: &T, offsets: &[u32; 16]) -> (u64x8, u64x8) {
-    let base_ptr = base as *const T;
-    let base_addr = base_ptr as u64;
-    let base_simd = u64x8::splat(base_addr);
-
-    // Convert slices directly to SIMD and multiply by element size
-    let first_offsets_u32 = u32x8::from(<[u32; 8]>::try_from(&offsets[..8]).unwrap()) * (std::mem::size_of::<T>() as u32);
-    let second_offsets_u32 = u32x8::from(<[u32; 8]>::try_from(&offsets[8..]).unwrap()) * (std::mem::size_of::<T>() as u32);
-
-    // Widen to u64 and add to base address
-    let first_offsets_u64 = first_offsets_u32.widen_to_u64x8();
-    let second_offsets_u64 = second_offsets_u32.widen_to_u64x8();
-
-    let first_addresses = base_simd + first_offsets_u64;
-    let second_addresses = base_simd + second_offsets_u64;
-
-    (first_addresses, second_addresses)
-}
-
-/// Lookup values directly from computed addresses (two u64x8 vectors)
+/// Lookup values from lookup table using u32 offsets
 /// Returns the looked up u8 values as a u8x16
+/// This centralizes the lookup logic and avoids code duplication
 #[inline]
-fn lookup_from_addresses(addresses: (u64x8, u64x8)) -> u8x16 {
-    let (first_addrs, second_addrs) = addresses;
-    let first_array = first_addrs.as_array();
-    let second_array = second_addrs.as_array();
-
-    // Perform lookups directly from the computed addresses
+fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> u8x16 {
+    // Perform lookups directly using simple indexing - fast and efficient
     let values = [
-        unsafe { *(first_array[0] as *const u8) },
-        unsafe { *(first_array[1] as *const u8) },
-        unsafe { *(first_array[2] as *const u8) },
-        unsafe { *(first_array[3] as *const u8) },
-        unsafe { *(first_array[4] as *const u8) },
-        unsafe { *(first_array[5] as *const u8) },
-        unsafe { *(first_array[6] as *const u8) },
-        unsafe { *(first_array[7] as *const u8) },
-        unsafe { *(second_array[0] as *const u8) },
-        unsafe { *(second_array[1] as *const u8) },
-        unsafe { *(second_array[2] as *const u8) },
-        unsafe { *(second_array[3] as *const u8) },
-        unsafe { *(second_array[4] as *const u8) },
-        unsafe { *(second_array[5] as *const u8) },
-        unsafe { *(second_array[6] as *const u8) },
-        unsafe { *(second_array[7] as *const u8) },
+        lookup_table[offsets[0] as usize],
+        lookup_table[offsets[1] as usize],
+        lookup_table[offsets[2] as usize],
+        lookup_table[offsets[3] as usize],
+        lookup_table[offsets[4] as usize],
+        lookup_table[offsets[5] as usize],
+        lookup_table[offsets[6] as usize],
+        lookup_table[offsets[7] as usize],
+        lookup_table[offsets[8] as usize],
+        lookup_table[offsets[9] as usize],
+        lookup_table[offsets[10] as usize],
+        lookup_table[offsets[11] as usize],
+        lookup_table[offsets[12] as usize],
+        lookup_table[offsets[13] as usize],
+        lookup_table[offsets[14] as usize],
+        lookup_table[offsets[15] as usize],
     ];
 
     u8x16::from(values)
@@ -104,15 +75,18 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     {
         let (chunks, rest) = values.as_chunks::<16>();
         for chunk in chunks {
-            // Calculate addresses using SIMD and prefetch them
-            let addresses = calc_real_addresses(&self.lookup_table[0], chunk);
-            use crate::prefetch::{L3, prefetch_sixteen_addresses};
-            prefetch_sixteen_addresses::<L3>(addresses);
+            // Try prefetching lookup table entries with L3 cache level
+            // NOTE: the below compiles down to nothing in release mode, as Rust can prove the below is statically
+            //       safe with no need for bounds checking.
+            let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
+            let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
 
-            // Lookup values using SIMD address calculation
-            let values = lookup_from_addresses(addresses);
+            use crate::prefetch::{prefetch_eight_offsets, L3};
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], first_half);
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], second_half);
 
-            // Call user function
+            // Get looked up values using centralized function
+            let values = lookup_from_offsets(&self.lookup_table, chunk);
             (f)(values, 16);
         }
 
@@ -210,13 +184,12 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
             return;
         }
 
-        // Calculate addresses for the first chunk
-        let current_chunk = chunks[0];
-        let mut current_addresses = calc_real_addresses(&self.lookup_table[0], &current_chunk);
+        // Process first chunk without prefetching (nothing to prefetch yet)
+        let mut current_chunk = chunks[0];
 
         // For single chunk case, just process it directly
         if chunks.len() == 1 {
-            let values = lookup_from_addresses(current_addresses);
+            let values = lookup_from_offsets(&self.lookup_table, &current_chunk);
             (f)(values, 16);
             if !rest.is_empty() {
                 self.process_remainder(rest, f);
@@ -226,23 +199,26 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
 
         // Pipeline: for each chunk, read current values, prefetch next, then process
         for (_, &next_chunk) in chunks.iter().enumerate().skip(1) {
-            // Step 1: Read current values using pre-calculated addresses
-            let current_values = lookup_from_addresses(current_addresses);
+            // Step 1: Read current chunk values from lookup table
+            let current_values = lookup_from_offsets(&self.lookup_table, &current_chunk);
 
-            // Step 2: Calculate and prefetch next chunk addresses while we have current values
-            let next_addresses = calc_real_addresses(&self.lookup_table[0], &next_chunk);
-            use crate::prefetch::{L3, prefetch_sixteen_addresses};
-            prefetch_sixteen_addresses::<L3>(next_addresses);
+            // Step 2: Prefetch next chunk addresses while we have current values
+            let next_first_half: &[u32; 8] = next_chunk[..8].try_into().unwrap();
+            let next_second_half: &[u32; 8] = next_chunk[8..].try_into().unwrap();
+
+            use crate::prefetch::{L3, prefetch_eight_offsets};
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_first_half);
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_second_half);
 
             // Step 3: Call lookup function with current values (while prefetches are in flight)
             (f)(current_values, 16);
 
-            // Move to next chunk - reuse the calculated addresses
-            current_addresses = next_addresses;
+            // Move to next chunk
+            current_chunk = next_chunk;
         }
 
-        // Process the last chunk using pre-calculated addresses
-        let last_values = lookup_from_addresses(current_addresses);
+        // Process the last chunk (no more chunks to prefetch)
+        let last_values = lookup_from_offsets(&self.lookup_table, &current_chunk);
         (f)(last_values, 16);
 
         // Handle remainder

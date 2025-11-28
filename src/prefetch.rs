@@ -16,13 +16,13 @@
 //! # Examples
 //!
 //! ```rust
-//! use simd_lookup::prefetch::{prefetch_eight_addresses, prefetch_eight_masked, L1, NTA};
+//! use simd_lookup::prefetch::{prefetch_eight_offsets, prefetch_eight_masked, L1, NTA};
 //!
 //! let data = vec![0u32; 1000];
 //! let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 //!
 //! // Prefetch 8 addresses for L1 cache
-//! prefetch_eight_addresses::<_, L1>(&data, &offsets);
+//! prefetch_eight_offsets::<_, L1>(&data, &offsets);
 //!
 //! // Prefetch with mask - only prefetch where mask bit is 1
 //! let mask = 0b10101010; // prefetch offsets[1], [3], [5], [7]
@@ -490,170 +490,6 @@ pub fn prefetch_eight_masked<T, L: CacheLevel>(base: &T, offsets: [u32; 8], mask
     }
 }
 
-/// Prefetch sixteen memory addresses directly from computed u64x8 vectors
-///
-/// This function takes two u64x8 vectors containing pre-computed memory addresses
-/// and prefetches all 16 addresses. This avoids redundant address calculations
-/// when addresses have already been computed for other purposes (e.g., lookups).
-///
-/// # Arguments
-/// * `addresses` - Tuple of two u64x8 vectors containing 16 memory addresses
-///
-/// # Type Parameters
-/// * `L` - Cache level implementing the `CacheLevel` trait
-#[inline(always)]
-pub fn prefetch_sixteen_addresses<L: CacheLevel>(addresses: (wide::u64x8, wide::u64x8)) {
-    let (first_addrs, second_addrs) = addresses;
-    let first_array = first_addrs.to_array();
-    let second_array = second_addrs.to_array();
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use std::arch::x86_64::*;
-        unsafe {
-            match L::HINT {
-                0 => {
-                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_NTA);
-                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_NTA);
-                }
-                1 => {
-                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T2);
-                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T2);
-                }
-                2 => {
-                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T1);
-                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T1);
-                }
-                3 => {
-                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T0);
-                }
-                _ => {
-                    // Default to T0 for unknown hint values
-                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T0);
-                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T0);
-                }
-            }
-        }
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        unsafe {
-            std::arch::asm!(
-                "prfm pldl1strm, [{0}]",
-                "prfm pldl1strm, [{1}]",
-                "prfm pldl1strm, [{2}]",
-                "prfm pldl1strm, [{3}]",
-                "prfm pldl1strm, [{4}]",
-                "prfm pldl1strm, [{5}]",
-                "prfm pldl1strm, [{6}]",
-                "prfm pldl1strm, [{7}]",
-                "prfm pldl1strm, [{8}]",
-                "prfm pldl1strm, [{9}]",
-                "prfm pldl1strm, [{10}]",
-                "prfm pldl1strm, [{11}]",
-                "prfm pldl1strm, [{12}]",
-                "prfm pldl1strm, [{13}]",
-                "prfm pldl1strm, [{14}]",
-                "prfm pldl1strm, [{15}]",
-                in(reg) first_array[0] as *const u8,
-                in(reg) first_array[1] as *const u8,
-                in(reg) first_array[2] as *const u8,
-                in(reg) first_array[3] as *const u8,
-                in(reg) first_array[4] as *const u8,
-                in(reg) first_array[5] as *const u8,
-                in(reg) first_array[6] as *const u8,
-                in(reg) first_array[7] as *const u8,
-                in(reg) second_array[0] as *const u8,
-                in(reg) second_array[1] as *const u8,
-                in(reg) second_array[2] as *const u8,
-                in(reg) second_array[3] as *const u8,
-                in(reg) second_array[4] as *const u8,
-                in(reg) second_array[5] as *const u8,
-                in(reg) second_array[6] as *const u8,
-                in(reg) second_array[7] as *const u8,
-            );
-        }
-    }
-
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
-        // No-op for unsupported architectures
-        let _ = (first_array, second_array);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -679,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefetch_eight_addresses() {
+    fn test_prefetch_eight_offsets() {
         let data = vec![0u32; 100];
         let offsets = [10, 20, 30, 40, 50, 60, 70, 80];
 
