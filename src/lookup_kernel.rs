@@ -186,41 +186,46 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
             return;
         }
 
-        // Process first chunk without prefetching (nothing to prefetch yet)
-        let mut current_chunk = chunks[0];
+        // Deep prefetch pipeline: prefetch PREFETCH_DISTANCE chunks ahead (64 values)
+        // This hides DRAM latency (~200-400 cycles) by having multiple memory requests in flight
+        const PREFETCH_DISTANCE: usize = 4; // 4 chunks = 64 values ahead
 
-        // For single chunk case, just process it directly
-        if chunks.len() == 1 {
-            let values = lookup_from_offsets(&self.lookup_table, &current_chunk);
-            (f)(values, 16);
+        // Helper to prefetch a chunk
+        let prefetch_chunk = |chunk: &[u32; 16]| {
+            let first_half: &[u32; 8] = chunk[..8].try_into().unwrap();
+            let second_half: &[u32; 8] = chunk[8..].try_into().unwrap();
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], first_half);
+            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], second_half);
+        };
+
+        // For small number of chunks, fall back to simple processing
+        if chunks.len() <= PREFETCH_DISTANCE {
+            for chunk in chunks {
+                let values = lookup_from_offsets(&self.lookup_table, chunk);
+                (f)(values, 16);
+            }
             if !rest.is_empty() {
                 self.process_remainder(rest, f);
             }
             return;
         }
 
-        // Pipeline: for each chunk, read current values, prefetch next, then process
-        for (_, &next_chunk) in chunks.iter().enumerate().skip(1) {
-            // Step 1: Read current chunk values from lookup table
-            let current_values = lookup_from_offsets(&self.lookup_table, &current_chunk);
-
-            // Step 2: Prefetch next chunk addresses while we have current values
-            let next_first_half: &[u32; 8] = next_chunk[..8].try_into().unwrap();
-            let next_second_half: &[u32; 8] = next_chunk[8..].try_into().unwrap();
-
-            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_first_half);
-            prefetch_eight_offsets::<_, L3>(&self.lookup_table[0], next_second_half);
-
-            // Step 3: Call lookup function with current values (while prefetches are in flight)
-            (f)(current_values, 16);
-
-            // Move to next chunk
-            current_chunk = next_chunk;
+        // Prime the prefetch pipeline: prefetch first PREFETCH_DISTANCE chunks
+        for i in 0..PREFETCH_DISTANCE {
+            prefetch_chunk(&chunks[i]);
         }
 
-        // Process the last chunk (no more chunks to prefetch)
-        let last_values = lookup_from_offsets(&self.lookup_table, &current_chunk);
-        (f)(last_values, 16);
+        // Main loop: process chunk i while prefetching chunk i+PREFETCH_DISTANCE
+        for i in 0..chunks.len() {
+            // Prefetch chunk i+PREFETCH_DISTANCE (if it exists)
+            if i + PREFETCH_DISTANCE < chunks.len() {
+                prefetch_chunk(&chunks[i + PREFETCH_DISTANCE]);
+            }
+
+            // Process chunk i (which was prefetched PREFETCH_DISTANCE iterations ago)
+            let values = lookup_from_offsets(&self.lookup_table, &chunks[i]);
+            (f)(values, 16);
+        }
 
         // Handle remainder
         if !rest.is_empty() {
