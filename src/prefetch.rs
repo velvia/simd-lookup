@@ -511,22 +511,99 @@ pub fn prefetch_sixteen_addresses<L: CacheLevel>(addresses: (wide::u64x8, wide::
     {
         use std::arch::x86_64::*;
         unsafe {
-            _mm_prefetch(first_array[0] as *const i8, L::HINT);
-            _mm_prefetch(first_array[1] as *const i8, L::HINT);
-            _mm_prefetch(first_array[2] as *const i8, L::HINT);
-            _mm_prefetch(first_array[3] as *const i8, L::HINT);
-            _mm_prefetch(first_array[4] as *const i8, L::HINT);
-            _mm_prefetch(first_array[5] as *const i8, L::HINT);
-            _mm_prefetch(first_array[6] as *const i8, L::HINT);
-            _mm_prefetch(first_array[7] as *const i8, L::HINT);
-            _mm_prefetch(second_array[0] as *const i8, L::HINT);
-            _mm_prefetch(second_array[1] as *const i8, L::HINT);
-            _mm_prefetch(second_array[2] as *const i8, L::HINT);
-            _mm_prefetch(second_array[3] as *const i8, L::HINT);
-            _mm_prefetch(second_array[4] as *const i8, L::HINT);
-            _mm_prefetch(second_array[5] as *const i8, L::HINT);
-            _mm_prefetch(second_array[6] as *const i8, L::HINT);
-            _mm_prefetch(second_array[7] as *const i8, L::HINT);
+            match L::HINT {
+                0 => {
+                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_NTA);
+                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_NTA);
+                }
+                1 => {
+                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T2);
+                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T2);
+                }
+                2 => {
+                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T1);
+                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T1);
+                }
+                3 => {
+                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T0);
+                }
+                _ => {
+                    // Default to T0 for unknown hint values
+                    _mm_prefetch(first_array[0] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[1] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[2] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[3] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[4] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[5] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[6] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(first_array[7] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[0] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[1] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[2] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[3] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[4] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[5] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[6] as *const i8, _MM_HINT_T0);
+                    _mm_prefetch(second_array[7] as *const i8, _MM_HINT_T0);
+                }
+            }
         }
     }
 
