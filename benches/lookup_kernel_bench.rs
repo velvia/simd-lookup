@@ -1,8 +1,11 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::prelude::*;
+use rustc_hash::FxHashMap;
 use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
+// use simd_lookup::entropy_map_lookup::EntropyMapLookup;
 use simd_lookup::lookup_kernel::{
-    SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup,
+    SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdDualVocabWithHashLookup,
+    SimdSingleVocabU32U8Lookup,
 };
 use simd_lookup::PipelinedSingleVocabU32U8Lookup;
 
@@ -253,7 +256,7 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
 fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
     let table1_size = 15_000_000;
     let density = 20.0; // 20% density
-    let chunk_size = 500;
+    let chunk_size = 1_000_000;
 
     // Create table 1 (fixed at 15M)
     println!(
@@ -343,7 +346,7 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
 fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
     let table1_size = 15_000_000;
     let density = 20.0; // 20% density
-    let chunk_size = 500;
+    let chunk_size = 1_000_000;
 
     // Create table 1 (fixed at 15M)
     println!(
@@ -411,12 +414,123 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark dual vocab lookup with FxHashMap for table2
+/// Tests varying hash table sizes: 1k, 3k, 10k, 30k, 100k, 300k entries
+/// Table1 is fixed at 15M entries with 20% density
+fn bench_dual_vocab_with_hash(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dual_vocab_with_hash");
+
+    // Fixed parameters for table1
+    let table1_size = 15_000_000;
+    let table1_density = 20.0;
+    let num_values = 1_000_000;
+    let chunk_size = 500;
+    let max_word_id = 15_000_000usize; // Max word ID for table2 keys
+
+    // Create table1 (same as other dual vocab benchmarks)
+    println!(
+        "Creating lookup table 1: {} entries, {}% density",
+        table1_size, table1_density
+    );
+    let entries1 = create_sparse_entries_for_kernel(table1_size, table1_density);
+    let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
+
+    // Create test values for table1
+    let test_values1 = create_test_values(num_values, table1_size);
+
+    group.throughput(Throughput::Elements(num_values as u64));
+
+    // Hash table sizes to test
+    let hash_sizes = [1_000, 3_000, 10_000, 30_000, 100_000, 300_000];
+
+    for &hash_size in &hash_sizes {
+        // Create FxHashMap entries with keys distributed across max_word_id range
+        println!(
+            "Creating FxHashMap table2 with {} entries (max key = {})",
+            hash_size, max_word_id
+        );
+        let mut rng = StdRng::seed_from_u64(123);
+        let mut hash_table2: FxHashMap<u32, u8> = FxHashMap::default();
+        let mut used_keys = std::collections::HashSet::new();
+
+        while hash_table2.len() < hash_size {
+            let key = rng.gen_range(0..max_word_id) as u32;
+            if !used_keys.contains(&key) {
+                used_keys.insert(key);
+                let value = ((key % 255) + 1) as u8;
+                hash_table2.insert(key, value);
+            }
+        }
+
+        // Create test values for table2 (random keys within max_word_id range)
+        let test_values2 = create_test_values(num_values, max_word_id);
+
+        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+
+        let size_label = match hash_size {
+            1_000 => "1k",
+            3_000 => "3k",
+            10_000 => "10k",
+            30_000 => "30k",
+            100_000 => "100k",
+            300_000 => "300k",
+            _ => "unknown",
+        };
+
+        group.bench_function(BenchmarkId::new("nonzero_filter", size_label), |b| {
+            b.iter(|| {
+                let mut result_vec: Vec<u8> = Vec::new();
+                let mut indices_vec: Vec<u32> = Vec::new();
+                let mut global_idx = 0usize;
+                // Process in chunks
+                for (chunk1, chunk2) in test_values1
+                    .chunks_exact(chunk_size)
+                    .zip(test_values2.chunks_exact(chunk_size))
+                {
+                    let mut result_guard = result_vec.bulk_extend_guard(chunk1.len());
+                    let result_slice = result_guard.as_mut_slice();
+                    let mut indices_guard = indices_vec.bulk_extend_guard(chunk1.len());
+                    let indices_slice = indices_guard.as_mut_slice();
+                    let mut num_written = 0;
+
+                    lookup.lookup_func(
+                        black_box(chunk1),
+                        black_box(chunk2),
+                        &mut |v1, v2, num_bytes| {
+                            // AND the two u8x16 values
+                            let combined = v1 & v2;
+                            let combined_array = combined.as_array();
+
+                            for (i, &val) in combined_array.iter().enumerate().take(num_bytes) {
+                                if val != 0 {
+                                    result_slice[num_written] = val;
+                                    indices_slice[num_written] = (global_idx + i) as u32;
+                                    num_written += 1;
+                                }
+                            }
+                            global_idx += num_bytes;
+                        },
+                    );
+
+                    result_guard.set_written(num_written);
+                    indices_guard.set_written(num_written);
+                }
+                black_box(&result_vec);
+                black_box(&indices_vec);
+            })
+        });
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_vocab_lookup,
     bench_pipelined_single_vocab_lookup,
     bench_dual_vocab_lookup,
     bench_dual_vocab_lookup_v2,
-    bench_dual_vocab_lookup_v2_simple
+    bench_dual_vocab_lookup_v2_simple,
+    bench_dual_vocab_with_hash
 );
 criterion_main!(benches);

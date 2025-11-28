@@ -12,9 +12,11 @@
 
 use wide::u8x16;
 
+use rustc_hash::FxHashMap;
+
 use crate::{
     bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender},
-    prefetch::{prefetch_address, prefetch_eight_offsets, L3, NTA},
+    prefetch::{prefetch_eight_offsets, L3},
 };
 
 /// Lookup values from lookup table using u32 offsets
@@ -326,9 +328,6 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
             let mut values2 = [0u8; 16];
             for i in 0..16 {
                 if values1[i] != 0 {
-                    // Prefetch this specific table2 address with NTA to avoid cache pollution
-                    prefetch_address::<_, L3>(&self.lookup_table2[0], chunk2[i]);
-
                     values2[i] = self.lookup_table2[chunk2[i] as usize];
                 }
             }
@@ -454,9 +453,6 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (8..16).rev() {
                 result_high <<= 8;
                 if vocab1_array[j] != 0 {
-                    // Prefetch this specific table2 address with L3 to avoid cache pollution
-                    prefetch_address::<_, L3>(&self.lookup2[0], local_chunk[j]);
-
                     result_high += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
@@ -466,9 +462,6 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             for j in (0..8).rev() {
                 result_low <<= 8;
                 if vocab1_array[j] != 0 {
-                    // Prefetch this specific table2 address with L3 to avoid cache pollution
-                    prefetch_address::<_, L3>(&self.lookup2[0], local_chunk[j]);
-
                     result_low += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
@@ -495,6 +488,128 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             }
             (f)(vocab1_result, u8x16::from(vocab2_result), rest2.len());
         }
+    }
+}
+
+/// Dual vocabulary lookup kernel using FxHashMap for table2.
+///
+/// This kernel is optimized for the case where table2 has a very small number of entries
+/// (sparse), making a hash map lookup more memory-efficient than a full lookup table.
+/// NOTE: We also tried writing a kernel with PHF-based EntropyMap, but it is slower than the HashMap version.
+///
+/// - Table1: Standard `&[u8]` lookup table (can be large)
+/// - Table2: `FxHashMap<u32, u8>` (optimized for sparse data with fast hashing)
+///
+/// The lookup behavior is the same as `SimdDualVocabU32U8Lookup`:
+/// - Table2 is only looked up if table1 returns a non-zero value
+/// - Results are passed to the user function as (u8x16, u8x16, num_bytes)
+pub struct SimdDualVocabWithHashLookup<'a> {
+    lookup_table1: &'a [u8],
+    lookup_table2: &'a FxHashMap<u32, u8>,
+}
+
+impl<'a> SimdDualVocabWithHashLookup<'a> {
+    /// Creates a new dual vocabulary lookup kernel with table1 as a slice and table2 as FxHashMap.
+    #[inline]
+    pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a FxHashMap<u32, u8>) -> Self {
+        Self {
+            lookup_table1,
+            lookup_table2,
+        }
+    }
+
+    /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
+    /// on assembled u8x16 results.
+    /// - lookup_table1 (slice) is used for the first slice
+    /// - lookup_table2 (FxHashMap) is used for the second slice
+    /// - Table2 is only looked up if table1 returns a non-zero value
+    /// - The user function is passed (lookedup_values1: u8x16, lookedup_values2: u8x16, num_bytes)
+    #[inline]
+    pub fn lookup_func<F>(&self, values1: &[u32], values2: &[u32], f: &mut F)
+    where
+        F: FnMut(u8x16, u8x16, usize),
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
+        let (chunks1, rest1) = values1.as_chunks::<16>();
+        let (chunks2, rest2) = values2.as_chunks::<16>();
+
+        for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
+            // Read table1 values
+            let mut values1 = [0u8; 16];
+            values1[0] = self.lookup_table1[chunk1[0] as usize];
+            values1[1] = self.lookup_table1[chunk1[1] as usize];
+            values1[2] = self.lookup_table1[chunk1[2] as usize];
+            values1[3] = self.lookup_table1[chunk1[3] as usize];
+            values1[4] = self.lookup_table1[chunk1[4] as usize];
+            values1[5] = self.lookup_table1[chunk1[5] as usize];
+            values1[6] = self.lookup_table1[chunk1[6] as usize];
+            values1[7] = self.lookup_table1[chunk1[7] as usize];
+            values1[8] = self.lookup_table1[chunk1[8] as usize];
+            values1[9] = self.lookup_table1[chunk1[9] as usize];
+            values1[10] = self.lookup_table1[chunk1[10] as usize];
+            values1[11] = self.lookup_table1[chunk1[11] as usize];
+            values1[12] = self.lookup_table1[chunk1[12] as usize];
+            values1[13] = self.lookup_table1[chunk1[13] as usize];
+            values1[14] = self.lookup_table1[chunk1[14] as usize];
+            values1[15] = self.lookup_table1[chunk1[15] as usize];
+
+            // Conditional hash lookup for table2 - only where table1 is nonzero
+            let mut values2 = [0u8; 16];
+            for i in 0..16 {
+                if values1[i] != 0 {
+                    values2[i] = self.lookup_table2.get(&chunk2[i]).copied().unwrap_or(0);
+                }
+            }
+
+            (f)(u8x16::from(values1), u8x16::from(values2), 16);
+        }
+
+        // Handle the rest
+        if !rest1.is_empty() {
+            let mut values1 = [0u8; 16];
+            let mut values2 = [0u8; 16];
+            for i in 0..rest1.len() {
+                values1[i] = self.lookup_table1[rest1[i] as usize];
+                if values1[i] != 0 {
+                    values2[i] = self.lookup_table2.get(&rest2[i]).copied().unwrap_or(0);
+                }
+            }
+            (f)(u8x16::from(values1), u8x16::from(values2), rest1.len());
+        }
+    }
+
+    /// Convenience function which does dual lookup, combines the results using a user-defined combiner function,
+    /// and extends the combined results into a Vec (pushing all combined results)
+    #[inline]
+    pub fn lookup_into_vec<F>(
+        &self,
+        values1: &[u32],
+        values2: &[u32],
+        output: &mut Vec<u8>,
+        f: &mut F,
+    ) where
+        F: FnMut(u8x16, u8x16) -> u8x16,
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
+
+        let mut write_guard = output.bulk_extend_guard(values1.len());
+        let mut write_slice = write_guard.as_mut_slice();
+        let mut num_written = 0;
+        self.lookup_func(
+            values1,
+            values2,
+            &mut |lookedup_values1, lookedup_values2, num_bytes| {
+                let combined = (f)(lookedup_values1, lookedup_values2);
+                write_slice.write_u8x16(num_written, combined, num_bytes);
+                num_written += num_bytes;
+            },
+        );
     }
 }
 
@@ -885,5 +1000,82 @@ mod tests {
                 global_idx += 1;
             }
         }
+    }
+
+    #[test]
+    fn test_dual_vocab_with_hash_lookup_basic() {
+        // Create table1 as a regular lookup table
+        let lookup_table1: Vec<u8> =
+            (0..256).map(|i| if i % 3 == 0 { 0 } else { i as u8 }).collect();
+
+        // Create table2 as a FxHashMap with sparse entries
+        let mut hash_table2: FxHashMap<u32, u8> = FxHashMap::default();
+        hash_table2.insert(0, 100);
+        hash_table2.insert(5, 105);
+        hash_table2.insert(10, 110);
+        hash_table2.insert(15, 115);
+        hash_table2.insert(20, 120);
+        hash_table2.insert(100, 200);
+
+        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+
+        // Test values
+        let values1: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let values2: Vec<u32> = vec![0, 5, 10, 15, 20, 100, 0, 5, 10, 15, 20, 100, 0, 5, 10, 15];
+
+        let mut vocab1_results = Vec::new();
+        let mut vocab2_results = Vec::new();
+
+        lookup.lookup_func(&values1, &values2, &mut |v1, v2, _num_bytes| {
+            vocab1_results.push(v1);
+            vocab2_results.push(v2);
+        });
+
+        assert_eq!(vocab1_results.len(), 1); // One chunk
+
+        let v1_array = vocab1_results[0].as_array();
+        let v2_array = vocab2_results[0].as_array();
+
+        // Check that table2 is only looked up where table1 is nonzero
+        for i in 0..16 {
+            let expected_v1 = lookup_table1[values1[i] as usize];
+            assert_eq!(v1_array[i], expected_v1, "v1 mismatch at index {}", i);
+
+            if expected_v1 != 0 {
+                let expected_v2 = hash_table2.get(&values2[i]).copied().unwrap_or(0);
+                assert_eq!(v2_array[i], expected_v2, "v2 mismatch at index {}", i);
+            } else {
+                assert_eq!(v2_array[i], 0, "v2 should be 0 where v1 is 0 at index {}", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_dual_vocab_with_hash_lookup_into_vec() {
+        // Create table1 as a regular lookup table (all nonzero)
+        let lookup_table1: Vec<u8> = (0..256).map(|i| (i + 1) as u8).collect();
+
+        // Create table2 as a FxHashMap
+        let mut hash_table2: FxHashMap<u32, u8> = FxHashMap::default();
+        hash_table2.insert(0, 10);
+        hash_table2.insert(1, 20);
+        hash_table2.insert(2, 30);
+        hash_table2.insert(3, 40);
+        hash_table2.insert(4, 50);
+
+        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+
+        let values1: Vec<u32> = vec![0, 1, 2, 3, 4, 5, 6, 7];
+        let values2: Vec<u32> = vec![0, 1, 2, 3, 4, 0, 1, 2];
+
+        let mut result = Vec::new();
+        lookup.lookup_into_vec(&values1, &values2, &mut result, &mut |v1, v2| v1 & v2);
+
+        // Result should be v1 & v2
+        assert_eq!(result.len(), 8);
+        // v1[0] = 1, v2[0] = 10, 1 & 10 = 0
+        assert_eq!(result[0], 1 & 10);
+        // v1[1] = 2, v2[1] = 20, 2 & 20 = 0
+        assert_eq!(result[1], 2 & 20);
     }
 }
