@@ -1,6 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::prelude::*;
-use simd_lookup::bitpacked_lookup::{BitPackedSingleVocab, BitPackedDualVocab, TwoBit, ThreeBit};
+use simd_lookup::bitpacked_lookup::{BitPackedDualVocab, BitPackedSingleVocab, ThreeBit, TwoBit};
 use simd_lookup::lookup_kernel::{SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup};
 
 /// Create sparse entries for kernel benchmarks
@@ -61,7 +61,10 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
     let lookup_table_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries);
     let lookup_u8 = SimdSingleVocabU32U8Lookup::new(&lookup_table_u8);
 
-    println!("Single vocab - Regular u8 table: {} MB", lookup_table_u8.len() / 1_000_000);
+    println!(
+        "Single vocab - Regular u8 table: {} MB",
+        lookup_table_u8.len() / 1_000_000
+    );
 
     group.bench_function("regular_u8", |b| {
         let mut results = Vec::new();
@@ -75,9 +78,14 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
     // 2-bit packed
     let lookup_2bit = BitPackedSingleVocab::<TwoBit>::from_entries(&entries);
 
-    println!("Single vocab - 2-bit packed: {} MB", lookup_2bit.memory_bytes() / 1_000_000);
-    println!("Compression ratio: {:.2}x",
-             lookup_table_u8.len() as f64 / lookup_2bit.memory_bytes() as f64);
+    println!(
+        "Single vocab - 2-bit packed: {} MB",
+        lookup_2bit.memory_bytes() / 1_000_000
+    );
+    println!(
+        "Compression ratio: {:.2}x",
+        lookup_table_u8.len() as f64 / lookup_2bit.memory_bytes() as f64
+    );
 
     group.bench_function("bitpacked_2bit", |b| {
         let mut results = vec![0u8; num_values];
@@ -118,7 +126,10 @@ fn bench_dual_vocab_comparison(c: &mut Criterion) {
         b.iter(|| {
             let mut result_count = 0u64;
             // Process in chunks like the original benchmark
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 lookup_u8_v2.lookup_func(
                     black_box(chunk1),
                     black_box(chunk2),
@@ -131,7 +142,7 @@ fn bench_dual_vocab_comparison(c: &mut Criterion) {
                                 result_count += 1;
                             }
                         }
-                    }
+                    },
                 );
             }
             black_box(result_count);
@@ -139,23 +150,30 @@ fn bench_dual_vocab_comparison(c: &mut Criterion) {
     });
 
     // 2-bit packed
-    let lookup_2bit_dual = BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+    let lookup_2bit_dual =
+        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
     let total_mb_2bit = lookup_2bit_dual.memory_bytes() / 1_000_000;
     println!("Dual vocab - 2-bit packed: {} MB total", total_mb_2bit);
-    println!("Compression ratio: {:.2}x",
-             (lookup_table1_u8.len() + lookup_table2_u8.len()) as f64 / lookup_2bit_dual.memory_bytes() as f64);
+    println!(
+        "Compression ratio: {:.2}x",
+        (lookup_table1_u8.len() + lookup_table2_u8.len()) as f64
+            / lookup_2bit_dual.memory_bytes() as f64
+    );
 
     group.bench_function("bitpacked_2bit", |b| {
         b.iter(|| {
             let mut result_count = 0u64;
             // Process in chunks
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 let mut results = vec![(0u8, 0u8); chunk1.len()];
                 lookup_2bit_dual.lookup_batch_conditional(
                     black_box(chunk1),
                     black_box(chunk2),
-                    black_box(&mut results)
+                    black_box(&mut results),
                 );
                 // Count non-zero ANDs
                 for (v1, v2) in results {
@@ -191,7 +209,8 @@ fn bench_table_size_scaling(c: &mut Criterion) {
         // Regular u8
         let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
         let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-        let mut lookup_u8_v2 = SimdDualVocabU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
+        let mut lookup_u8_v2 =
+            SimdDualVocabU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
 
         let total_mb = (lookup_table1_u8.len() + lookup_table2_u8.len()) / 1_000_000;
 
@@ -202,7 +221,10 @@ fn bench_table_size_scaling(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     let mut result_count = 0u64;
-                    for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+                    for (chunk1, chunk2) in test_values1
+                        .chunks_exact(500)
+                        .zip(test_values2.chunks_exact(500))
+                    {
                         lookup_u8_v2.lookup_func(
                             black_box(chunk1),
                             black_box(chunk2),
@@ -213,16 +235,17 @@ fn bench_table_size_scaling(c: &mut Criterion) {
                                         result_count += 1;
                                     }
                                 }
-                            }
+                            },
                         );
                     }
                     black_box(result_count);
                 })
-            }
+            },
         );
 
         // 2-bit packed
-        let lookup_2bit_dual = BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+        let lookup_2bit_dual =
+            BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
         let packed_mb = lookup_2bit_dual.memory_bytes() / 1_000_000;
 
         group.bench_with_input(
@@ -231,12 +254,15 @@ fn bench_table_size_scaling(c: &mut Criterion) {
             |b, _| {
                 b.iter(|| {
                     let mut result_count = 0u64;
-                    for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+                    for (chunk1, chunk2) in test_values1
+                        .chunks_exact(500)
+                        .zip(test_values2.chunks_exact(500))
+                    {
                         let mut results = vec![(0u8, 0u8); chunk1.len()];
                         lookup_2bit_dual.lookup_batch_conditional(
                             black_box(chunk1),
                             black_box(chunk2),
-                            black_box(&mut results)
+                            black_box(&mut results),
                         );
                         for (v1, v2) in results {
                             if v1 & v2 != 0 {
@@ -246,7 +272,7 @@ fn bench_table_size_scaling(c: &mut Criterion) {
                     }
                     black_box(result_count);
                 })
-            }
+            },
         );
     }
 
@@ -270,19 +296,26 @@ fn bench_bit_width_comparison(c: &mut Criterion) {
 
     let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1_2bit);
     let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2_2bit);
-    let lookup_2bit = BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+    let lookup_2bit =
+        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
-    println!("\n2-bit dual vocab: {} MB", lookup_2bit.memory_bytes() / 1_000_000);
+    println!(
+        "\n2-bit dual vocab: {} MB",
+        lookup_2bit.memory_bytes() / 1_000_000
+    );
 
     group.bench_function("2bit", |b| {
         b.iter(|| {
             let mut result_count = 0u64;
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 let mut results = vec![(0u8, 0u8); chunk1.len()];
                 lookup_2bit.lookup_batch_conditional(
                     black_box(chunk1),
                     black_box(chunk2),
-                    black_box(&mut results)
+                    black_box(&mut results),
                 );
                 for (v1, v2) in results {
                     if v1 & v2 != 0 {
@@ -300,19 +333,28 @@ fn bench_bit_width_comparison(c: &mut Criterion) {
 
     let lookup_table1_u8_3bit = simd_lookup::lookup::create_scalar_lookup_table(&entries1_3bit);
     let lookup_table2_u8_3bit = simd_lookup::lookup::create_scalar_lookup_table(&entries2_3bit);
-    let lookup_3bit = BitPackedDualVocab::<ThreeBit>::from_u8_tables(&lookup_table1_u8_3bit, &lookup_table2_u8_3bit);
+    let lookup_3bit = BitPackedDualVocab::<ThreeBit>::from_u8_tables(
+        &lookup_table1_u8_3bit,
+        &lookup_table2_u8_3bit,
+    );
 
-    println!("3-bit dual vocab: {} MB", lookup_3bit.memory_bytes() / 1_000_000);
+    println!(
+        "3-bit dual vocab: {} MB",
+        lookup_3bit.memory_bytes() / 1_000_000
+    );
 
     group.bench_function("3bit", |b| {
         b.iter(|| {
             let mut result_count = 0u64;
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 let mut results = vec![(0u8, 0u8); chunk1.len()];
                 lookup_3bit.lookup_batch_conditional(
                     black_box(chunk1),
                     black_box(chunk2),
-                    black_box(&mut results)
+                    black_box(&mut results),
                 );
                 for (v1, v2) in results {
                     if v1 & v2 != 0 {
@@ -340,23 +382,30 @@ fn bench_conditional_vs_unconditional(c: &mut Criterion) {
 
     let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
     let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-    let lookup_2bit = BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+    let lookup_2bit =
+        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
     let mut group = c.benchmark_group("conditional_vs_unconditional");
     group.throughput(Throughput::Elements(num_values as u64));
 
-    println!("\nBit-packed 2-bit dual vocab: {} MB", lookup_2bit.memory_bytes() / 1_000_000);
+    println!(
+        "\nBit-packed 2-bit dual vocab: {} MB",
+        lookup_2bit.memory_bytes() / 1_000_000
+    );
 
     // Conditional lookup (only table2 if table1 != 0)
     group.bench_function("conditional_20pct", |b| {
         b.iter(|| {
             let mut result_count = 0u64;
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 let mut results = vec![(0u8, 0u8); chunk1.len()];
                 lookup_2bit.lookup_batch_conditional(
                     black_box(chunk1),
                     black_box(chunk2),
-                    black_box(&mut results)
+                    black_box(&mut results),
                 );
                 // Count non-zero ANDs
                 for (v1, v2) in results {
@@ -373,12 +422,15 @@ fn bench_conditional_vs_unconditional(c: &mut Criterion) {
     group.bench_function("unconditional_100pct", |b| {
         b.iter(|| {
             let mut result_count = 0u64;
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 let mut results = vec![(0u8, 0u8); chunk1.len()];
                 lookup_2bit.lookup_batch_unconditional(
                     black_box(chunk1),
                     black_box(chunk2),
-                    black_box(&mut results)
+                    black_box(&mut results),
                 );
                 // Count non-zero ANDs
                 for (v1, v2) in results {
@@ -403,4 +455,3 @@ criterion_group!(
     bench_conditional_vs_unconditional
 );
 criterion_main!(benches);
-

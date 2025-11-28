@@ -148,7 +148,11 @@ impl<S: BitPackStrategy> BitPackedLookup<S> {
     /// Batch lookup into a pre-allocated result slice
     #[inline]
     pub fn lookup_batch(&self, keys: &[u32], results: &mut [u8]) {
-        assert_eq!(keys.len(), results.len(), "Keys and results must have same length");
+        assert_eq!(
+            keys.len(),
+            results.len(),
+            "Keys and results must have same length"
+        );
 
         for (i, &key) in keys.iter().enumerate() {
             results[i] = self.lookup(key);
@@ -230,7 +234,11 @@ impl<S: BitPackStrategy> BitPackedDualVocab<S> {
     #[inline]
     pub fn lookup_batch_conditional(&self, keys1: &[u32], keys2: &[u32], results: &mut [(u8, u8)]) {
         assert_eq!(keys1.len(), keys2.len(), "Key slices must have same length");
-        assert_eq!(keys1.len(), results.len(), "Keys and results must have same length");
+        assert_eq!(
+            keys1.len(),
+            results.len(),
+            "Keys and results must have same length"
+        );
 
         for i in 0..keys1.len() {
             let val1 = self.lookup1.lookup(keys1[i]);
@@ -248,25 +256,42 @@ impl<S: BitPackStrategy> BitPackedDualVocab<S> {
     /// User reports this is similar speed to conditional despite doing more work,
     /// because it eliminates branch misprediction overhead.
     #[inline]
-    pub fn lookup_batch_unconditional(&self, keys1: &[u32], keys2: &[u32], results: &mut [(u8, u8)]) {
+    pub fn lookup_batch_unconditional(
+        &self,
+        keys1: &[u32],
+        keys2: &[u32],
+        results: &mut [(u8, u8)],
+    ) {
         assert_eq!(keys1.len(), keys2.len(), "Key slices must have same length");
-        assert_eq!(keys1.len(), results.len(), "Keys and results must have same length");
+        assert_eq!(
+            keys1.len(),
+            results.len(),
+            "Keys and results must have same length"
+        );
 
         // Clean branch-free loop - compiler can auto-vectorize!
         for i in 0..keys1.len() {
-            results[i] = (
-                self.lookup1.lookup(keys1[i]),
-                self.lookup2.lookup(keys2[i])
-            );
+            results[i] = (self.lookup1.lookup(keys1[i]), self.lookup2.lookup(keys2[i]));
         }
     }
 
     /// Dual lookup with combining function
     #[inline]
-    pub fn lookup_batch_combined<F>(&self, keys1: &[u32], keys2: &[u32], results: &mut [u8], combine: F)
-    where F: Fn(u8, u8) -> u8 {
+    pub fn lookup_batch_combined<F>(
+        &self,
+        keys1: &[u32],
+        keys2: &[u32],
+        results: &mut [u8],
+        combine: F,
+    ) where
+        F: Fn(u8, u8) -> u8,
+    {
         assert_eq!(keys1.len(), keys2.len(), "Key slices must have same length");
-        assert_eq!(keys1.len(), results.len(), "Keys and results must have same length");
+        assert_eq!(
+            keys1.len(),
+            results.len(),
+            "Keys and results must have same length"
+        );
 
         for i in 0..keys1.len() {
             let val1 = self.lookup1.lookup(keys1[i]);
@@ -290,10 +315,10 @@ mod tests {
     fn test_two_bit_pack_extract() {
         // Test packing all 4 possible 2-bit values
         let mut word = 0u64;
-        word = TwoBit::pack(word, 0, 0);  // 0b00 at position 0
-        word = TwoBit::pack(word, 1, 1);  // 0b01 at position 1
-        word = TwoBit::pack(word, 2, 2);  // 0b10 at position 2
-        word = TwoBit::pack(word, 3, 3);  // 0b11 at position 3
+        word = TwoBit::pack(word, 0, 0); // 0b00 at position 0
+        word = TwoBit::pack(word, 1, 1); // 0b01 at position 1
+        word = TwoBit::pack(word, 2, 2); // 0b10 at position 2
+        word = TwoBit::pack(word, 3, 3); // 0b11 at position 3
 
         assert_eq!(TwoBit::extract(word, 0), 0);
         assert_eq!(TwoBit::extract(word, 1), 1);
@@ -304,9 +329,9 @@ mod tests {
     #[test]
     fn test_three_bit_pack_extract() {
         let mut word = 0u64;
-        word = ThreeBit::pack(word, 0, 0);  // 0b000
-        word = ThreeBit::pack(word, 7, 1);  // 0b111
-        word = ThreeBit::pack(word, 5, 2);  // 0b101
+        word = ThreeBit::pack(word, 0, 0); // 0b000
+        word = ThreeBit::pack(word, 7, 1); // 0b111
+        word = ThreeBit::pack(word, 5, 2); // 0b101
 
         assert_eq!(ThreeBit::extract(word, 0), 0);
         assert_eq!(ThreeBit::extract(word, 1), 7);
@@ -356,7 +381,10 @@ mod tests {
 
         println!("Original: {} MB", original_bytes / 1_000_000);
         println!("2-bit packed: {} MB", packed_2bit_bytes / 1_000_000);
-        println!("Compression ratio: {:.2}x", original_bytes as f64 / packed_2bit_bytes as f64);
+        println!(
+            "Compression ratio: {:.2}x",
+            original_bytes as f64 / packed_2bit_bytes as f64
+        );
     }
 
     #[test]
@@ -388,4 +416,3 @@ mod tests {
         assert_eq!(results[4].0, 3);
     }
 }
-

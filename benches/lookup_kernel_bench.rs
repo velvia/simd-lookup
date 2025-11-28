@@ -1,7 +1,9 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::prelude::*;
 use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
-use simd_lookup::lookup_kernel::{SimdSingleVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2};
+use simd_lookup::lookup_kernel::{
+    SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup,
+};
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
 /// Returns Vec<(u32, u8)> entries that can be converted to a lookup table
@@ -52,7 +54,10 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
 
-    println!("Creating lookup table: {} entries, {}% density", table_size, density);
+    println!(
+        "Creating lookup table: {} entries, {}% density",
+        table_size, density
+    );
     // Use the same table creation method as batch_lookup benchmark
     let entries = create_sparse_entries_for_kernel(table_size, density);
     let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
@@ -82,14 +87,16 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-
 /// Benchmark SimdDualVocabU32U8Lookup with chunks of 500
 /// Takes bitwise AND of the two lookup results
 fn bench_dual_vocab_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
 
-    println!("Creating dual lookup tables: {} entries, {}% density", table_size, density);
+    println!(
+        "Creating dual lookup tables: {} entries, {}% density",
+        table_size, density
+    );
     // Use the same table creation method as batch_lookup benchmark
     let entries1 = create_sparse_entries_for_kernel(table_size, density);
     let entries2 = create_sparse_entries_for_kernel(table_size, density);
@@ -109,13 +116,16 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
         b.iter(|| {
             let mut all_results = Vec::new();
             // Process in chunks of 500
-            for (chunk1, chunk2) in test_values1.chunks_exact(500).zip(test_values2.chunks_exact(500)) {
+            for (chunk1, chunk2) in test_values1
+                .chunks_exact(500)
+                .zip(test_values2.chunks_exact(500))
+            {
                 // Use bitwise AND as the combiner function, but write results to a Vec
                 lookup.lookup_into_vec(
                     black_box(chunk1),
                     black_box(chunk2),
                     &mut all_results,
-                    &mut |v1, v2| v1 & v2
+                    &mut |v1, v2| v1 & v2,
                 );
             }
             black_box(all_results);
@@ -134,7 +144,10 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
     let chunk_size = 500;
 
     // Create table 1 (fixed at 15M)
-    println!("Creating lookup table 1: {} entries, {}% density", table1_size, density);
+    println!(
+        "Creating lookup table 1: {} entries, {}% density",
+        table1_size, density
+    );
     let entries1 = create_sparse_entries_for_kernel(table1_size, density);
     let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
 
@@ -167,7 +180,10 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
             b.iter(|| {
                 let mut result_vec = Vec::new();
                 // Process in chunks of 500
-                for (chunk1, chunk2) in test_values1.chunks_exact(chunk_size).zip(test_values2.chunks_exact(chunk_size)) {
+                for (chunk1, chunk2) in test_values1
+                    .chunks_exact(chunk_size)
+                    .zip(test_values2.chunks_exact(chunk_size))
+                {
                     let mut guard = result_vec.bulk_extend_guard(chunk1.len());
                     let write_slice = guard.as_mut_slice();
                     let mut num_written = 0;
@@ -188,7 +204,7 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                                     num_written += 1;
                                 }
                             }
-                        }
+                        },
                     );
 
                     guard.set_written(num_written);
@@ -209,7 +225,10 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
     let chunk_size = 500;
 
     // Create table 1 (fixed at 15M)
-    println!("Creating lookup table 1 (simple): {} entries, {}% density", table1_size, density);
+    println!(
+        "Creating lookup table 1 (simple): {} entries, {}% density",
+        table1_size, density
+    );
     let entries1 = create_sparse_entries_for_kernel(table1_size, density);
     let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
 
@@ -242,7 +261,10 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
             b.iter(|| {
                 let mut result_vec: Vec<u8> = Vec::with_capacity(num_values);
                 // Process in chunks of 500
-                for (chunk1, chunk2) in test_values1.chunks_exact(chunk_size).zip(test_values2.chunks_exact(chunk_size)) {
+                for (chunk1, chunk2) in test_values1
+                    .chunks_exact(chunk_size)
+                    .zip(test_values2.chunks_exact(chunk_size))
+                {
                     // Pre-extend the vec for this chunk
                     let mut guard = result_vec.bulk_extend_guard(chunk1.len());
                     let mut write_slice = guard.as_mut_slice();
@@ -256,7 +278,7 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
                             let combined = v1 & v2;
                             write_slice.write_u8x16(num_written, combined, num_bytes);
                             num_written += num_bytes;
-                        }
+                        },
                     );
                     // guard drops here, finalizes to correct length
                 }
@@ -276,4 +298,3 @@ criterion_group!(
     bench_dual_vocab_lookup_v2_simple
 );
 criterion_main!(benches);
-

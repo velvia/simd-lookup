@@ -123,12 +123,14 @@ impl<'a, T> BulkExtendGuard<'a, T> {
         let new_len = original_len + elements_to_write;
         vec.reserve(elements_to_write);
         // Safety: we will finalize to the correct length on drop
-        unsafe { vec.set_len(new_len); }
+        unsafe {
+            vec.set_len(new_len);
+        }
         Self {
             vec,
             original_len,
             extended_by: elements_to_write,
-            written: elements_to_write,  // default: assume all elements will be written
+            written: elements_to_write, // default: assume all elements will be written
         }
     }
 
@@ -195,6 +197,6 @@ impl SliceU8SIMDExtender for &mut [u8] {
     // }
     #[inline(always)]
     fn write_u8x16(&mut self, index: usize, value: u8x16, slice_len: usize) {
-        self[index..index+slice_len].copy_from_slice(&value.as_array()[..slice_len]);
+        self[index..index + slice_len].copy_from_slice(&value.as_array()[..slice_len]);
     }
 }

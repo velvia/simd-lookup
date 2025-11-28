@@ -128,8 +128,10 @@ pub fn benchmark_construction_time(sizes: &[usize], density: f32) -> Vec<(usize,
 
         results.push((size, dict_time, bitpacked_time));
 
-        println!("Size: {}, Dict: {}ns, Bitpacked: {}ns",
-                size, dict_time, bitpacked_time);
+        println!(
+            "Size: {}, Dict: {}ns, Bitpacked: {}ns",
+            size, dict_time, bitpacked_time
+        );
     }
 
     results

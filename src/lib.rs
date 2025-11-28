@@ -1,15 +1,18 @@
-pub mod table64;
-pub mod lookup;
-pub mod eight_value_lookup;
-pub mod entropy_map_lookup;
-pub mod lookup_kernel;
 pub mod bitpacked_lookup;
 pub mod bulk_vec_extender;
+pub mod eight_value_lookup;
+pub mod entropy_map_lookup;
+pub mod lookup;
+pub mod lookup_kernel;
+pub mod prefetch;
+pub mod table64;
+pub mod wide_utils;
 
 // Re-export the main types for convenience
-pub use lookup::{SimdLookup, ScalarLookup, HashLookup, Lookup, U8x8};
 pub use eight_value_lookup::EightValueLookup;
-pub use entropy_map_lookup::{EntropyMapLookup, EntropyMapBitpackedLookup};
+pub use entropy_map_lookup::{EntropyMapBitpackedLookup, EntropyMapLookup};
+pub use lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
+pub use wide_utils::{FromBitmask, WideUtilsExt};
 
 #[cfg(test)]
 mod tests {

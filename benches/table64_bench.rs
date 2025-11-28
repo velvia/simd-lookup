@@ -1,6 +1,6 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use wide::u8x16;
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use simd_lookup::table64::Table64;
+use wide::u8x16;
 
 fn create_test_table() -> [u8; 64] {
     let mut table = [0u8; 64];
@@ -30,7 +30,8 @@ fn bench_table64_lookup(c: &mut Criterion) {
     let mut group = c.benchmark_group("table64_lookup");
 
     // Test different sizes of data to lookup (each processes 16 bytes)
-    for size in [1, 64, 1024, 8192, 31250].iter() { // 31250 * 16 = 500k bytes
+    for size in [1, 64, 1024, 8192, 31250].iter() {
+        // 31250 * 16 = 500k bytes
         let indices = create_test_indices(*size);
         let mut output = vec![u8x16::splat(0); *size];
 
@@ -174,4 +175,3 @@ criterion_group!(
     bench_different_access_patterns
 );
 criterion_main!(benches);
-

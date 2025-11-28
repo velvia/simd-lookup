@@ -61,14 +61,20 @@ fn main() {
     let scalar_duration = start.elapsed();
 
     println!("  SIMD:   {:?} ({} found)", simd_duration, simd_found_count);
-    println!("  Scalar: {:?} ({} found)", scalar_duration, scalar_found_count);
+    println!(
+        "  Scalar: {:?} ({} found)",
+        scalar_duration, scalar_found_count
+    );
 
     if simd_duration < scalar_duration {
         let speedup = scalar_duration.as_nanos() as f64 / simd_duration.as_nanos() as f64;
         println!("  SIMD is {:.2}x faster!", speedup);
     } else {
         let slowdown = simd_duration.as_nanos() as f64 / scalar_duration.as_nanos() as f64;
-        println!("  SIMD is {:.2}x slower (may need larger datasets or different CPU)", slowdown);
+        println!(
+            "  SIMD is {:.2}x slower (may need larger datasets or different CPU)",
+            slowdown
+        );
     }
 
     println!();

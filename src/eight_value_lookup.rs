@@ -21,7 +21,10 @@ impl EightValueLookup {
     /// # Panics
     /// Panics if more than 8 values are provided
     pub fn new(values: &[u32]) -> Self {
-        assert!(values.len() <= 8, "EightValueLookup supports at most 8 values");
+        assert!(
+            values.len() <= 8,
+            "EightValueLookup supports at most 8 values"
+        );
 
         let mut array = [0u32; 8];
         for (i, &val) in values.iter().enumerate() {
@@ -413,9 +416,11 @@ mod tests {
         let test_array = test_values.to_array();
         for (i, &test_val) in test_array.iter().enumerate() {
             let single_result = lookup.find_position(test_val);
-            assert_eq!(batch_results[i], single_result,
+            assert_eq!(
+                batch_results[i], single_result,
                 "Mismatch for value {} at index {}: batch={}, single={}",
-                test_val, i, batch_results[i], single_result);
+                test_val, i, batch_results[i], single_result
+            );
         }
     }
 

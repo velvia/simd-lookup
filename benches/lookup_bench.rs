@@ -1,7 +1,7 @@
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::prelude::*;
-use simd_lookup::lookup::{HashLookup, Lookup, SimdLookup, U8x8};
 use simd_lookup::EightValueLookup;
+use simd_lookup::lookup::{HashLookup, Lookup, SimdLookup, U8x8};
 use wide::u32x8;
 
 fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
@@ -122,11 +122,11 @@ fn bench_batch_lookup(c: &mut Criterion) {
                         let chunk_len = chunk.len();
                         let start_len = results.len();
                         results.reserve(chunk_len);
-                        unsafe { results.set_len(start_len + chunk_len); }
-                        scalar_lookup.lookup_batch(
-                            black_box(chunk),
-                            black_box(&mut results[start_len..])
-                        );
+                        unsafe {
+                            results.set_len(start_len + chunk_len);
+                        }
+                        scalar_lookup
+                            .lookup_batch(black_box(chunk), black_box(&mut results[start_len..]));
                     }
                     results.clear(); // Reset for next iteration
                     black_box(results);
@@ -145,11 +145,11 @@ fn bench_batch_lookup(c: &mut Criterion) {
                         let chunk_len = chunk.len();
                         let start_len = results.len();
                         results.reserve(chunk_len);
-                        unsafe { results.set_len(start_len + chunk_len); }
-                        hash_lookup.lookup_batch(
-                            black_box(chunk),
-                            black_box(&mut results[start_len..])
-                        );
+                        unsafe {
+                            results.set_len(start_len + chunk_len);
+                        }
+                        hash_lookup
+                            .lookup_batch(black_box(chunk), black_box(&mut results[start_len..]));
                     }
                     results.clear(); // Reset for next iteration
                     black_box(results);
@@ -274,25 +274,17 @@ fn bench_density_comparison(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(test_keys.len() as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("scalar", density),
-            &density,
-            |b, _| {
-                b.iter(|| {
-                    scalar_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("scalar", density), &density, |b, _| {
+            b.iter(|| {
+                scalar_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("hash", density),
-            &density,
-            |b, _| {
-                b.iter(|| {
-                    hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hash", density), &density, |b, _| {
+            b.iter(|| {
+                hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
+            })
+        });
     }
 
     group.finish();
@@ -333,15 +325,11 @@ fn bench_memory_usage_patterns(c: &mut Criterion) {
             },
         );
 
-        group.bench_with_input(
-            BenchmarkId::new("hash", table_size),
-            &table_size,
-            |b, _| {
-                b.iter(|| {
-                    hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("hash", table_size), &table_size, |b, _| {
+            b.iter(|| {
+                hash_lookup.lookup_batch(black_box(&test_keys), black_box(&mut results));
+            })
+        });
     }
 
     group.finish();
@@ -387,8 +375,12 @@ fn bench_cache_stress_test(c: &mut Criterion) {
     // Note: SIMD processes fewer elements due to chunking (10000 -> 9992)
     let simd_elements_processed = u32x8_keys.len() * 8;
 
-    println!("Cache stress test: {} scalar keys, {} SIMD elements ({} u32x8 vectors)",
-             test_keys.len(), simd_elements_processed, u32x8_keys.len());
+    println!(
+        "Cache stress test: {} scalar keys, {} SIMD elements ({} u32x8 vectors)",
+        test_keys.len(),
+        simd_elements_processed,
+        u32x8_keys.len()
+    );
 
     // Scalar and hash benchmarks
     group.throughput(Throughput::Elements(test_keys.len() as u64));
@@ -551,17 +543,13 @@ fn bench_eight_value_table_sizes(c: &mut Criterion) {
         // Create test values
         let test_values: Vec<u32> = (0..500_000).map(|i| (i * 13 + 7) as u32).collect();
 
-        group.bench_with_input(
-            BenchmarkId::new("simd", table_size),
-            &table_size,
-            |b, _| {
-                b.iter(|| {
-                    for &val in &test_values {
-                        black_box(simd_lookup.find_position(black_box(val)));
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("simd", table_size), &table_size, |b, _| {
+            b.iter(|| {
+                for &val in &test_values {
+                    black_box(simd_lookup.find_position(black_box(val)));
+                }
+            })
+        });
 
         group.bench_with_input(
             BenchmarkId::new("scalar", table_size),
@@ -600,30 +588,22 @@ fn bench_eight_value_hit_rates(c: &mut Criterion) {
             }
         }
 
-        group.bench_with_input(
-            BenchmarkId::new("simd", hit_rate),
-            &hit_rate,
-            |b, _| {
-                b.iter(|| {
-                    for &val in &test_values {
-                        black_box(simd_lookup.find_position(black_box(val)));
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("simd", hit_rate), &hit_rate, |b, _| {
+            b.iter(|| {
+                for &val in &test_values {
+                    black_box(simd_lookup.find_position(black_box(val)));
+                }
+            })
+        });
 
-        group.bench_with_input(
-            BenchmarkId::new("scalar", hit_rate),
-            &hit_rate,
-            |b, _| {
-                b.iter(|| {
-                    for &val in &test_values {
-                        let pos = lookup_table.iter().position(|&x| x == black_box(val));
-                        black_box(pos.map(|p| p as i32).unwrap_or(-1));
-                    }
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("scalar", hit_rate), &hit_rate, |b, _| {
+            b.iter(|| {
+                for &val in &test_values {
+                    let pos = lookup_table.iter().position(|&x| x == black_box(val));
+                    black_box(pos.map(|p| p as i32).unwrap_or(-1));
+                }
+            })
+        });
     }
 
     group.finish();

@@ -31,6 +31,7 @@ harness = false
 [[example]]
 name = "eight_value_demo"
 
+
 # Optimize for maximum performance, especially for SIMD operations
 [profile.release]
 lto = "fat"              # Full link-time optimization

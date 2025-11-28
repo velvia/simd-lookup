@@ -42,7 +42,9 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     /// u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
     #[inline]
     pub fn lookup_func<F>(&self, values: &[u32], f: &mut F)
-    where F: FnMut(u8x16, usize) {
+    where
+        F: FnMut(u8x16, usize),
+    {
         let (chunks, rest) = values.as_chunks::<16>();
         for chunk in chunks {
             // Get looked up values - LLVM should be able to auto-vectorize this
@@ -94,7 +96,10 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     /// Version of lookup_into_vec which writes into a mutable u8x16 buffer, for cascaded lookups
     #[inline]
     pub fn lookup_into_u8x16_buffer(&self, values: &[u32], buffer: &mut [u8x16]) {
-        assert!((buffer.len() * 16) >= values.len(), "Buffer must be at least as long as the input values");
+        assert!(
+            (buffer.len() * 16) >= values.len(),
+            "Buffer must be at least as long as the input values"
+        );
         let mut idx = 0;
         self.lookup_func(values, &mut |lookedup_values, _num_bytes| {
             buffer[idx] = lookedup_values;
@@ -117,7 +122,6 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     }
 }
 
-
 /// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
 /// It always does a lookup of the second table.
 /// This is perfect for event_value + page_screen combined lookup functions.
@@ -136,7 +140,10 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     /// Creates a new dual vocabulary lookup kernel with the given lookup tables.
     #[inline]
     pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a [u8]) -> Self {
-        Self { lookup_table1, lookup_table2 }
+        Self {
+            lookup_table1,
+            lookup_table2,
+        }
     }
 
     /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
@@ -148,8 +155,13 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     ///   u8x16 with zeroes.  Thus, the lookup assumes the zero is basically a NOP.
     #[inline]
     pub fn lookup_func<F>(&self, values1: &[u32], values2: &[u32], f: &mut F)
-    where F: FnMut(u8x16, u8x16, usize) {
-        assert!(values1.len() == values2.len(), "Values1 and values2 must have the same length");
+    where
+        F: FnMut(u8x16, u8x16, usize),
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
         let (chunks1, rest1) = values1.as_chunks::<16>();
         let (chunks2, rest2) = values2.as_chunks::<16>();
         for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
@@ -200,23 +212,36 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     /// The combiner function `f` takes two u8x16 values (looked up from table1 and table2) and returns a combined u8x16.
     /// Unlike the single vocabulary version, this dual vocabulary version requires a combiner function.
     #[inline]
-    pub fn lookup_into_vec<F>(&self, values1: &[u32], values2: &[u32], output: &mut Vec<u8>, f: &mut F)
-    where F: FnMut(u8x16, u8x16) -> u8x16 {
-        assert!(values1.len() == values2.len(), "Values1 and values2 must have the same length");
+    pub fn lookup_into_vec<F>(
+        &self,
+        values1: &[u32],
+        values2: &[u32],
+        output: &mut Vec<u8>,
+        f: &mut F,
+    ) where
+        F: FnMut(u8x16, u8x16) -> u8x16,
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
 
         let mut write_guard = output.bulk_extend_guard(values1.len());
         let mut write_slice = write_guard.as_mut_slice();
         let mut num_written = 0;
-        self.lookup_func(values1, values2, &mut |lookedup_values1, lookedup_values2, num_bytes| {
-            let combined = (f)(lookedup_values1, lookedup_values2);
-            write_slice.write_u8x16(num_written, combined, num_bytes);
-            num_written += num_bytes;
-        });
+        self.lookup_func(
+            values1,
+            values2,
+            &mut |lookedup_values1, lookedup_values2, num_bytes| {
+                let combined = (f)(lookedup_values1, lookedup_values2);
+                write_slice.write_u8x16(num_written, combined, num_bytes);
+                num_written += num_bytes;
+            },
+        );
         // write_guard drops here, automatically finalizes to correct length.  We don't have to set final
         // number of bytes since it is the same as the input, which is the default
     }
 }
-
 
 /// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
 /// It tries to eliminate thrashing by using internally the single vocab kernel to write results out first to
@@ -236,9 +261,11 @@ pub struct SimdDualVocabU32U8LookupV2<'a> {
 impl<'a> SimdDualVocabU32U8LookupV2<'a> {
     #[inline]
     pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a [u8]) -> Self {
-        Self { lookup1: SimdSingleVocabU32U8Lookup::new(lookup_table1),
+        Self {
+            lookup1: SimdSingleVocabU32U8Lookup::new(lookup_table1),
             lookup2: lookup_table2,
-             temp_buffer: Vec::with_capacity(128) }
+            temp_buffer: Vec::with_capacity(128),
+        }
     }
 
     /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
@@ -254,14 +281,20 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
     /// - num_bytes: usually 16, but may be less for the last/remainder chunk.
     #[inline]
     pub fn lookup_func<F>(&mut self, values1: &[u32], values2: &[u32], f: &mut F)
-    where F: FnMut(u8x16, u8x16, usize) {
-        assert!(values1.len() == values2.len(), "Values1 and values2 must have the same length");
+    where
+        F: FnMut(u8x16, u8x16, usize),
+    {
+        assert!(
+            values1.len() == values2.len(),
+            "Values1 and values2 must have the same length"
+        );
 
         // Clear temp_buffer for reuse
         self.temp_buffer.clear();
 
         // First read the first vocabulary into the temporary buffer
-        self.lookup1.lookup_extend_u8x16_vec(values1, &mut self.temp_buffer);
+        self.lookup1
+            .lookup_extend_u8x16_vec(values1, &mut self.temp_buffer);
 
         let (chunks2, rest2) = values2.as_chunks::<16>();
 
@@ -321,7 +354,6 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_single_vocab_lookup_into_vec() {
         // Create a simple lookup table
@@ -360,14 +392,14 @@ mod tests {
         lookup.lookup_into_vec(&values1, &values2, &mut result, &mut |v1, v2| v1 | v2);
 
         assert_eq!(result.len(), values1.len());
-        assert_eq!(result[0], 0);   // 0
-        assert_eq!(result[1], 1 | 10);  // 11
-        assert_eq!(result[2], 2 | 20);  // 22
-        assert_eq!(result[3], 3 | 30);  // 31
-        assert_eq!(result[4], 4 | 40);  // 44
-        assert_eq!(result[5], 1 | 10);  // 11
-        assert_eq!(result[6], 2 | 20);  // 22
-        assert_eq!(result[7], 3 | 30);  // 31
+        assert_eq!(result[0], 0); // 0
+        assert_eq!(result[1], 1 | 10); // 11
+        assert_eq!(result[2], 2 | 20); // 22
+        assert_eq!(result[3], 3 | 30); // 31
+        assert_eq!(result[4], 4 | 40); // 44
+        assert_eq!(result[5], 1 | 10); // 11
+        assert_eq!(result[6], 2 | 20); // 22
+        assert_eq!(result[7], 3 | 30); // 31
     }
 
     #[test]
@@ -427,7 +459,7 @@ mod tests {
 
         // Check vocab2 results - should only be looked up where vocab1 is nonzero
         let v2_array = vocab2_results[0].as_array();
-        assert_eq!(v2_array[0], 0);  // vocab1[0] == 0, so vocab2[0] should be 0 (not looked up)
+        assert_eq!(v2_array[0], 0); // vocab1[0] == 0, so vocab2[0] should be 0 (not looked up)
         assert_eq!(v2_array[1], 20); // vocab1[1] == 1 (nonzero), so vocab2[1] == lookup_table2[values2[1]] == lookup_table2[2] == 20
         assert_eq!(v2_array[2], 30); // vocab1[2] == 2 (nonzero), so vocab2[2] == lookup_table2[values2[2]] == lookup_table2[3] == 30
         assert_eq!(v2_array[3], 40); // vocab1[3] == 3 (nonzero), so vocab2[3] == lookup_table2[values2[3]] == lookup_table2[4] == 40

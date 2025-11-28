@@ -194,7 +194,11 @@ impl SimdLookup {
             .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect();
 
-        Self { table, table_u32, max_key }
+        Self {
+            table,
+            table_u32,
+            max_key,
+        }
     }
 
     /// Lookup 8 u32 keys at once, returning 8 u8 values
@@ -307,10 +311,8 @@ impl SimdLookup {
 
                 // Check bounds - create mask for valid indices
                 let max_key_vec = _mm256_set1_epi32(self.max_key as i32);
-                let bounds_check = _mm256_cmpeq_epi32(
-                    _mm256_min_epu32(keys_vec, max_key_vec),
-                    keys_vec
-                );
+                let bounds_check =
+                    _mm256_cmpeq_epi32(_mm256_min_epu32(keys_vec, max_key_vec), keys_vec);
                 let valid_mask_vec = bounds_check; // Keep as __m256i
 
                 // Step 1: Divide keys by 4 to get u32 word indices (using right shift by 2)
@@ -325,9 +327,9 @@ impl SimdLookup {
                 let gathered_words = _mm256_mask_i32gather_epi32(
                     _mm256_setzero_si256(), // src - default value for invalid indices
                     self.table_u32.as_ptr() as *const i32, // base_addr
-                    word_indices, // vindex
-                    valid_mask_vec, // mask
-                    4, // scale factor (sizeof(u32))
+                    word_indices,           // vindex
+                    valid_mask_vec,         // mask
+                    4,                      // scale factor (sizeof(u32))
                 );
 
                 // Step 4: Extract individual bytes from the gathered u32 words
@@ -379,8 +381,8 @@ impl SimdLookup {
                 // Step 3: SIMD gather u32 words containing our target bytes (NO MASK - UNSAFE!)
                 let gathered_words = _mm256_i32gather_epi32(
                     self.table_u32.as_ptr() as *const i32, // base_addr
-                    word_indices, // vindex
-                    4, // scale factor (sizeof(u32))
+                    word_indices,                          // vindex
+                    4,                                     // scale factor (sizeof(u32))
                 );
 
                 // Step 4: Extract individual bytes from the gathered u32 words
@@ -521,7 +523,6 @@ impl SimdLookup {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,9 +612,18 @@ mod tests {
     fn test_simd_gather_approach() {
         // Test the sophisticated SIMD gather approach with specific patterns
         let entries = vec![
-            (0, 10), (1, 11), (2, 12), (3, 13),   // First u32 word: [10, 11, 12, 13]
-            (4, 20), (5, 21), (6, 22), (7, 23),   // Second u32 word: [20, 21, 22, 23]
-            (8, 30), (9, 31), (10, 32), (11, 33), // Third u32 word: [30, 31, 32, 33]
+            (0, 10),
+            (1, 11),
+            (2, 12),
+            (3, 13), // First u32 word: [10, 11, 12, 13]
+            (4, 20),
+            (5, 21),
+            (6, 22),
+            (7, 23), // Second u32 word: [20, 21, 22, 23]
+            (8, 30),
+            (9, 31),
+            (10, 32),
+            (11, 33), // Third u32 word: [30, 31, 32, 33]
         ];
 
         let lookup = SimdLookup::new(&entries);
@@ -653,5 +663,4 @@ mod tests {
         assert_eq!(results[0].to_array(), expected1.to_array());
         assert_eq!(results[1].to_array(), expected2.to_array());
     }
-
 }
