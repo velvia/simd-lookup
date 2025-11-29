@@ -7,7 +7,8 @@ use simd_lookup::lookup_kernel::{
     SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2, SimdDualVocabWithHashLookup,
     SimdJoinedDualVocabU32U8Lookup, SimdSingleVocabU32U8Lookup,
 };
-use simd_lookup::PipelinedSingleVocabU32U8Lookup;
+use simd_lookup::{PipelinedSingleVocabU32U8Lookup, compress_store_u8x16, compress_store_u32x16};
+use wide::{u8x16, u32x16};
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
 /// Returns Vec<(u32, u8)> entries that can be converted to a lookup table
@@ -97,7 +98,9 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
         b.iter(|| {
             result_vec.clear();
             indices_vec.clear();
-            let mut global_idx = 0;
+            let mut indices_simd = u32x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+            let sixteen = u32x16::splat(16);
+            let zeroes = u8x16::splat(0);
             // Process in chunks of 500
             for chunk in test_values.chunks_exact(500) {
                 let mut result_guard = result_vec.bulk_extend_guard(chunk.len());
@@ -106,15 +109,32 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
                 let indices_slice = indices_guard.as_mut_slice();
                 let mut num_written = 0;
                 lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
-                    let array = lookedup_values.to_array();
-                    for i in 0..num_bytes {
-                        if array[i] != 0 {
-                            result_slice[num_written] = array[i];
-                            indices_slice[num_written] = (global_idx + i) as u32;
-                            num_written += 1;
-                        }
+                    // let array = lookedup_values.to_array();
+                    // for i in 0..num_bytes {
+                    //     if array[i] != 0 {
+                    //         result_slice[num_written] = array[i];
+                    //         indices_slice[num_written] = (global_idx + i) as u32;
+                    //         num_written += 1;
+                    //     }
+                    // }
+                    // global_idx += num_bytes;
+
+                    // Check which values are nonzero and convert to bitmask
+                    // simd_eq returns 0xFF where equal to zero, so invert to get nonzero mask
+                    let eq_mask = lookedup_values.simd_eq(zeroes).to_bitmask();
+                    let nonzero_mask = !eq_mask as u16;
+
+                    // Compress nonzero values into result_slice
+                    let written = compress_store_u8x16(lookedup_values, nonzero_mask, &mut result_slice[num_written..]);
+                    let _ = compress_store_u32x16(indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
+                    num_written += written;
+
+                    // Update indices based on num_bytes
+                    if num_bytes < 16 {
+                        indices_simd = indices_simd + u32x16::splat(num_bytes as u32);
+                    } else {
+                        indices_simd = indices_simd + sixteen;
                     }
-                    global_idx += num_bytes;
                 });
                 result_guard.set_written(num_written);
                 indices_guard.set_written(num_written);
