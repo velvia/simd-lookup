@@ -240,10 +240,13 @@ impl WideUtilsExt for u32x8 {
             return shuffle_u32x8_scalar(self, indices);
         }
 
-        // On ARM, scalar is faster than TBL-based shuffle for u32x8
-        // (TBL requires byte-level index conversion which adds overhead)
+        // On ARM, try SVE first (has native permute), fall back to scalar
+        // (NEON TBL requires byte-level index conversion which adds overhead)
         #[cfg(target_arch = "aarch64")]
         {
+            if std::arch::is_aarch64_feature_detected!("sve") {
+                return unsafe { shuffle_u32x8_sve(self, indices) };
+            }
             return shuffle_u32x8_scalar(self, indices);
         }
 
@@ -280,8 +283,13 @@ impl WideUtilsExt for u32x4 {
 
     #[inline(always)]
     fn shuffle(self, indices: Self) -> Self {
-        // Scalar is faster than TBL-based shuffle for u32 types on all platforms
-        // (TBL requires byte-level index conversion which adds overhead)
+        #[cfg(target_arch = "aarch64")]
+        {
+            if std::arch::is_aarch64_feature_detected!("sve") {
+                return unsafe { shuffle_u32x4_sve(self, indices) };
+            }
+        }
+        // Scalar fallback - faster than NEON TBL for u32 (no byte-index conversion)
         shuffle_u32x4_scalar(self, indices)
     }
 }
@@ -306,6 +314,7 @@ impl WideUtilsExt for u8x16 {
 
         #[cfg(target_arch = "aarch64")]
         {
+            // SVE has native tbl, but NEON TBL is already optimal for u8x16
             return unsafe { shuffle_u8x16_neon(self, indices) };
         }
 
@@ -587,7 +596,80 @@ unsafe fn shuffle_u8x16_neon(input: u8x16, indices: u8x16) -> u8x16 {
 // NOTE: NEON TBL-based u32x4/u32x8 shuffle implementations were removed.
 // While NEON TBL is fast for u8x16 shuffles, using it for u32 shuffles requires
 // converting u32 indices to byte indices (4 bytes per element) via a loop,
-// which adds significant overhead. Scalar shuffle is faster for u32 types on ARM.
+// which adds significant overhead. Scalar shuffle is faster for u32 types on ARM
+// unless SVE is available.
+
+// =============================================================================
+// SVE Implementations (ARM Scalable Vector Extension)
+// =============================================================================
+
+/// SVE u32x4 shuffle using TBL instruction via inline assembly
+/// SVE TBL does element-wise table lookup with native u32 indices (no byte conversion needed)
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "sve")]
+unsafe fn shuffle_u32x4_sve(input: u32x4, indices: u32x4) -> u32x4 {
+    use std::arch::asm;
+    let data_arr = input.to_array();
+    let idx_arr = indices.to_array();
+    let mut out = [0u32; 4];
+
+    unsafe {
+        asm!(
+            "ptrue p0.s, vl4",           // Predicate for 4 elements
+            "ld1w {{z0.s}}, p0/z, [{data}]",  // Load data
+            "ld1w {{z1.s}}, p0/z, [{idx}]",   // Load indices
+            "tbl z2.s, {{z0.s}}, z1.s",       // Table lookup permute
+            "st1w {{z2.s}}, p0, [{out}]",     // Store result
+            data = in(reg) data_arr.as_ptr(),
+            idx = in(reg) idx_arr.as_ptr(),
+            out = in(reg) out.as_mut_ptr(),
+            options(nostack)
+        );
+    }
+    u32x4::from(out)
+}
+
+/// SVE u32x8 shuffle using TBL instruction via inline assembly
+/// Processes as two u32x4 halves
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "sve")]
+unsafe fn shuffle_u32x8_sve(input: u32x8, indices: u32x8) -> u32x8 {
+    use std::arch::asm;
+    let data_arr = input.to_array();
+    let idx_arr = indices.to_array();
+    let mut out = [0u32; 8];
+
+    unsafe {
+        // Process low half (indices 0-3 reference data 0-3)
+        asm!(
+            "ptrue p0.s, vl4",
+            "ld1w {{z0.s}}, p0/z, [{data}]",
+            "ld1w {{z1.s}}, p0/z, [{idx}]",
+            "tbl z2.s, {{z0.s}}, z1.s",
+            "st1w {{z2.s}}, p0, [{out}]",
+            data = in(reg) data_arr.as_ptr(),
+            idx = in(reg) idx_arr.as_ptr(),
+            out = in(reg) out.as_mut_ptr(),
+            options(nostack)
+        );
+
+        // Process high half (indices 4-7 reference data 4-7, adjusted by -4)
+        asm!(
+            "ptrue p0.s, vl4",
+            "ld1w {{z0.s}}, p0/z, [{data}]",  // Load high data
+            "ld1w {{z1.s}}, p0/z, [{idx}]",   // Load high indices
+            "mov z3.s, #4",                    // Load constant 4
+            "sub z1.s, z1.s, z3.s",           // Subtract 4 from indices
+            "tbl z2.s, {{z0.s}}, z1.s",       // Table lookup
+            "st1w {{z2.s}}, p0, [{out}]",
+            data = in(reg) data_arr.as_ptr().add(4),
+            idx = in(reg) idx_arr.as_ptr().add(4),
+            out = in(reg) out.as_mut_ptr().add(4),
+            options(nostack)
+        );
+    }
+    u32x8::from(out)
+}
 
 // =============================================================================
 // Scalar/Portable Fallback Implementations

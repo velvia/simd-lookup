@@ -64,8 +64,8 @@ pub fn compress_store_u32x8(data: u32x8, mask: u8, dest: &mut [u32]) -> usize {
         }
     }
 
-    // Fallback: use shuffle-based compression
-    compress_store_u32x8_shuffle(data, mask, dest);
+    // Fallback: gather-style direct write (faster than shuffle on ARM)
+    compress_store_u32x8_gather(data, mask, dest);
     count
 }
 
@@ -108,13 +108,19 @@ unsafe fn compress_u32x8_avx512(data: u32x8, mask: u8) -> u32x8 {
     }
 }
 
+/// Gather-style compress for u32x8 - direct indexed writes to destination.
 #[inline]
-fn compress_store_u32x8_shuffle(data: u32x8, mask: u8, dest: &mut [u32]) {
-    let indices = get_compress_indices_u32x8(mask);
-    let shuffled = data.shuffle(indices);
-    let arr = shuffled.to_array();
-    let count = mask.count_ones() as usize;
-    dest[..count].copy_from_slice(&arr[..count]);
+fn compress_store_u32x8_gather(data: u32x8, mask: u8, dest: &mut [u32]) {
+    let arr = data.to_array();
+    let mut idx = 0;
+    if mask & (1 << 0) != 0 { dest[idx] = arr[0]; idx += 1; }
+    if mask & (1 << 1) != 0 { dest[idx] = arr[1]; idx += 1; }
+    if mask & (1 << 2) != 0 { dest[idx] = arr[2]; idx += 1; }
+    if mask & (1 << 3) != 0 { dest[idx] = arr[3]; idx += 1; }
+    if mask & (1 << 4) != 0 { dest[idx] = arr[4]; idx += 1; }
+    if mask & (1 << 5) != 0 { dest[idx] = arr[5]; idx += 1; }
+    if mask & (1 << 6) != 0 { dest[idx] = arr[6]; idx += 1; }
+    if mask & (1 << 7) != 0 { dest[idx] = arr[7]; }
 }
 
 // =============================================================================
@@ -264,8 +270,9 @@ pub fn compress_store_u8x16(data: u8x16, mask: u16, dest: &mut [u8]) -> usize {
         }
     }
 
-    // Fallback: split into two halves and use shuffle
-    compress_store_u8x16_shuffle(data, mask, dest);
+    // Fallback: gather-style direct write (faster than shuffle on ARM)
+    // Avoids shuffle index building, shuffle operation, and intermediate copies
+    compress_store_u8x16_gather(data, mask, dest);
     count
 }
 
@@ -307,16 +314,36 @@ unsafe fn compress_u8x16_avx512(data: u8x16, mask: u16) -> u8x16 {
     }
 }
 
+/// Gather-style compress for u8x16 - direct indexed writes to destination.
+/// Faster than shuffle-based approach on ARM because it avoids:
+/// - Building shuffle indices from lookup tables
+/// - The shuffle operation itself
+/// - Intermediate array copies
 #[inline]
-
-fn compress_store_u8x16_shuffle(data: u8x16, mask: u16, dest: &mut [u8]) {
-    let result = compress_u8x16_shuffle(data, mask);
-    let count = mask.count_ones() as usize;
-    let arr = result.to_array();
-    dest[..count].copy_from_slice(&arr[..count]);
+fn compress_store_u8x16_gather(data: u8x16, mask: u16, dest: &mut [u8]) {
+    let arr = data.to_array();
+    let mut idx = 0;
+    // Unrolled gather: each element is conditionally written
+    // Compiler can optimize this to efficient indexed stores
+    if mask & (1 << 0) != 0 { dest[idx] = arr[0]; idx += 1; }
+    if mask & (1 << 1) != 0 { dest[idx] = arr[1]; idx += 1; }
+    if mask & (1 << 2) != 0 { dest[idx] = arr[2]; idx += 1; }
+    if mask & (1 << 3) != 0 { dest[idx] = arr[3]; idx += 1; }
+    if mask & (1 << 4) != 0 { dest[idx] = arr[4]; idx += 1; }
+    if mask & (1 << 5) != 0 { dest[idx] = arr[5]; idx += 1; }
+    if mask & (1 << 6) != 0 { dest[idx] = arr[6]; idx += 1; }
+    if mask & (1 << 7) != 0 { dest[idx] = arr[7]; idx += 1; }
+    if mask & (1 << 8) != 0 { dest[idx] = arr[8]; idx += 1; }
+    if mask & (1 << 9) != 0 { dest[idx] = arr[9]; idx += 1; }
+    if mask & (1 << 10) != 0 { dest[idx] = arr[10]; idx += 1; }
+    if mask & (1 << 11) != 0 { dest[idx] = arr[11]; idx += 1; }
+    if mask & (1 << 12) != 0 { dest[idx] = arr[12]; idx += 1; }
+    if mask & (1 << 13) != 0 { dest[idx] = arr[13]; idx += 1; }
+    if mask & (1 << 14) != 0 { dest[idx] = arr[14]; idx += 1; }
+    if mask & (1 << 15) != 0 { dest[idx] = arr[15]; }
 }
 
-/// Compress u8x16 using shuffle tables.
+/// Compress u8x16 using shuffle tables (used by compress_u8x16 which returns a vector).
 /// This is a two-pass approach that handles each 8-byte half separately.
 #[inline]
 fn compress_u8x16_shuffle(data: u8x16, mask: u16) -> u8x16 {
