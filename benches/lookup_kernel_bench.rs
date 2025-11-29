@@ -109,6 +109,7 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
                 let indices_slice = indices_guard.as_mut_slice();
                 let mut num_written = 0;
                 lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
+                    // This is the old scalar code.  The SIMD Compress code on Intel AVX512 is super fast!
                     // let array = lookedup_values.to_array();
                     // for i in 0..num_bytes {
                     //     if array[i] != 0 {
@@ -185,14 +186,16 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
         })
     });
 
-    // Complex version: filter zeros and track indices (using BulkVecExtender)
+    // Complex version: filter zeros and track indices (using SIMD compress + BulkVecExtender)
     group.bench_function("chunks_of_500_complex", |b| {
         let mut result_vec = Vec::new();
         let mut indices_vec = Vec::new();
         b.iter(|| {
             result_vec.clear();
             indices_vec.clear();
-            let mut global_idx = 0;
+            let mut indices_simd = u32x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+            let sixteen = u32x16::splat(16);
+            let zeroes = u8x16::splat(0);
             // Process in chunks of 500
             for chunk in test_values.chunks_exact(500) {
                 let mut result_guard = result_vec.bulk_extend_guard(chunk.len());
@@ -201,15 +204,19 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
                 let indices_slice = indices_guard.as_mut_slice();
                 let mut num_written = 0;
                 lookup.lookup_func(black_box(chunk), &mut |lookedup_values, num_bytes| {
-                    let array = lookedup_values.to_array();
-                    for i in 0..num_bytes {
-                        if array[i] != 0 {
-                            result_slice[num_written] = array[i];
-                            indices_slice[num_written] = (global_idx + i) as u32;
-                            num_written += 1;
-                        }
+                    // SIMD compress: filter zeros and track indices without branching
+                    let eq_mask = lookedup_values.simd_eq(zeroes).to_bitmask();
+                    let nonzero_mask = !eq_mask as u16;
+
+                    let written = compress_store_u8x16(lookedup_values, nonzero_mask, &mut result_slice[num_written..]);
+                    let _ = compress_store_u32x16(indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
+                    num_written += written;
+
+                    if num_bytes < 16 {
+                        indices_simd = indices_simd + u32x16::splat(num_bytes as u32);
+                    } else {
+                        indices_simd = indices_simd + sixteen;
                     }
-                    global_idx += num_bytes;
                 });
                 result_guard.set_written(num_written);
                 indices_guard.set_written(num_written);
@@ -376,8 +383,10 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
             b.iter(|| {
                 let mut result_vec: Vec<u8> = Vec::new();
                 let mut indices_vec: Vec<u32> = Vec::new();
-                let mut global_idx = 0usize;
-                // Process in chunks of 500
+                let mut indices_simd = u32x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+                let sixteen = u32x16::splat(16);
+                let zeroes = u8x16::splat(0);
+                // Process in chunks
                 for (chunk1, chunk2) in test_values1
                     .chunks_exact(chunk_size)
                     .zip(test_values2.chunks_exact(chunk_size))
@@ -392,21 +401,20 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
                         black_box(chunk1),
                         black_box(chunk2),
                         &mut |v1, v2, num_bytes| {
-                            // AND the two u8x16 values
+                            // AND the two u8x16 values, then SIMD compress nonzero results
                             let combined = v1 & v2;
-                            let combined_array = combined.as_array();
+                            let eq_mask = combined.simd_eq(zeroes).to_bitmask();
+                            let nonzero_mask = !eq_mask as u16;
 
-                            // Write any nonzero u8's into the slice and track their indices.
-                            // Using the extend_guard() lets us optimize and use faster writes,
-                            // and avoid the overhead of pushing to a Vec.
-                            for (i, &val) in combined_array.iter().enumerate().take(num_bytes) {
-                                if val != 0 {
-                                    result_slice[num_written] = val;
-                                    indices_slice[num_written] = (global_idx + i) as u32;
-                                    num_written += 1;
-                                }
+                            let written = compress_store_u8x16(combined, nonzero_mask, &mut result_slice[num_written..]);
+                            let _ = compress_store_u32x16(indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
+                            num_written += written;
+
+                            if num_bytes < 16 {
+                                indices_simd = indices_simd + u32x16::splat(num_bytes as u32);
+                            } else {
+                                indices_simd = indices_simd + sixteen;
                             }
-                            global_idx += num_bytes;
                         },
                     );
 
@@ -562,7 +570,9 @@ fn bench_dual_vocab_with_hash(c: &mut Criterion) {
             b.iter(|| {
                 let mut result_vec: Vec<u8> = Vec::new();
                 let mut indices_vec: Vec<u32> = Vec::new();
-                let mut global_idx = 0usize;
+                let mut indices_simd = u32x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+                let sixteen = u32x16::splat(16);
+                let zeroes = u8x16::splat(0);
                 // Process in chunks
                 for (chunk1, chunk2) in test_values1
                     .chunks_exact(chunk_size)
@@ -578,18 +588,20 @@ fn bench_dual_vocab_with_hash(c: &mut Criterion) {
                         black_box(chunk1),
                         black_box(chunk2),
                         &mut |v1, v2, num_bytes| {
-                            // AND the two u8x16 values
+                            // AND the two u8x16 values, then SIMD compress nonzero results
                             let combined = v1 & v2;
-                            let combined_array = combined.as_array();
+                            let eq_mask = combined.simd_eq(zeroes).to_bitmask();
+                            let nonzero_mask = !eq_mask as u16;
 
-                            for (i, &val) in combined_array.iter().enumerate().take(num_bytes) {
-                                if val != 0 {
-                                    result_slice[num_written] = val;
-                                    indices_slice[num_written] = (global_idx + i) as u32;
-                                    num_written += 1;
-                                }
+                            let written = compress_store_u8x16(combined, nonzero_mask, &mut result_slice[num_written..]);
+                            let _ = compress_store_u32x16(indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
+                            num_written += written;
+
+                            if num_bytes < 16 {
+                                indices_simd = indices_simd + u32x16::splat(num_bytes as u32);
+                            } else {
+                                indices_simd = indices_simd + sixteen;
                             }
-                            global_idx += num_bytes;
                         },
                     );
 

@@ -240,9 +240,11 @@ impl WideUtilsExt for u32x8 {
             return shuffle_u32x8_scalar(self, indices);
         }
 
+        // On ARM, scalar is faster than TBL-based shuffle for u32x8
+        // (TBL requires byte-level index conversion which adds overhead)
         #[cfg(target_arch = "aarch64")]
         {
-            return unsafe { shuffle_u32x8_neon(self, indices) };
+            return shuffle_u32x8_scalar(self, indices);
         }
 
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
@@ -278,15 +280,9 @@ impl WideUtilsExt for u32x4 {
 
     #[inline(always)]
     fn shuffle(self, indices: Self) -> Self {
-        #[cfg(target_arch = "aarch64")]
-        {
-            return unsafe { shuffle_u32x4_neon(self, indices) };
-        }
-
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            shuffle_u32x4_scalar(self, indices)
-        }
+        // Scalar is faster than TBL-based shuffle for u32 types on all platforms
+        // (TBL requires byte-level index conversion which adds overhead)
+        shuffle_u32x4_scalar(self, indices)
     }
 }
 
@@ -588,70 +584,10 @@ unsafe fn shuffle_u8x16_neon(input: u8x16, indices: u8x16) -> u8x16 {
     }
 }
 
-/// NEON u32x4 shuffle using TBL with byte-level indexing
-/// We treat the u32x4 as u8x16 and compute byte indices from u32 indices
-#[cfg(target_arch = "aarch64")]
-unsafe fn shuffle_u32x4_neon(input: u32x4, indices: u32x4) -> u32x4 {
-    unsafe {
-        let data_arr = input.to_array();
-        let idx_arr = indices.to_array();
-
-        // Convert u32 indices to byte indices: each u32 index becomes 4 consecutive byte indices
-        let mut byte_indices = [0u8; 16];
-        for i in 0..4 {
-            let base = (idx_arr[i] & 3) as u8 * 4; // Mask to 0-3, multiply by 4
-            byte_indices[i * 4] = base;
-            byte_indices[i * 4 + 1] = base + 1;
-            byte_indices[i * 4 + 2] = base + 2;
-            byte_indices[i * 4 + 3] = base + 3;
-        }
-
-        let data = vld1q_u8(data_arr.as_ptr() as *const u8);
-        let idx = vld1q_u8(byte_indices.as_ptr());
-        let result = vqtbl1q_u8(data, idx);
-
-        let mut out = [0u32; 4];
-        vst1q_u8(out.as_mut_ptr() as *mut u8, result);
-        u32x4::from(out)
-    }
-}
-
-/// NEON u32x8 shuffle: process as two u32x4 operations
-/// Uses TBL2 to handle cross-half shuffles
-#[cfg(target_arch = "aarch64")]
-unsafe fn shuffle_u32x8_neon(input: u32x8, indices: u32x8) -> u32x8 {
-    unsafe {
-        let data_arr = input.to_array();
-        let idx_arr = indices.to_array();
-
-        // Load data as two 128-bit registers
-        let data_lo = vld1q_u8(data_arr.as_ptr() as *const u8);
-        let data_hi = vld1q_u8((data_arr.as_ptr() as *const u8).add(16));
-        let table = uint8x16x2_t(data_lo, data_hi);
-
-        // Convert u32 indices to byte indices for TBL2
-        // TBL2 sees both registers as a single 32-byte table
-        let mut byte_indices = [0u8; 32];
-        for i in 0..8 {
-            let base = (idx_arr[i] & 7) as u8 * 4;
-            byte_indices[i * 4] = base;
-            byte_indices[i * 4 + 1] = base + 1;
-            byte_indices[i * 4 + 2] = base + 2;
-            byte_indices[i * 4 + 3] = base + 3;
-        }
-
-        let idx_lo = vld1q_u8(byte_indices.as_ptr());
-        let idx_hi = vld1q_u8(byte_indices.as_ptr().add(16));
-
-        let result_lo = vqtbl2q_u8(table, idx_lo);
-        let result_hi = vqtbl2q_u8(table, idx_hi);
-
-        let mut out = [0u32; 8];
-        vst1q_u8(out.as_mut_ptr() as *mut u8, result_lo);
-        vst1q_u8((out.as_mut_ptr() as *mut u8).add(16), result_hi);
-        u32x8::from(out)
-    }
-}
+// NOTE: NEON TBL-based u32x4/u32x8 shuffle implementations were removed.
+// While NEON TBL is fast for u8x16 shuffles, using it for u32 shuffles requires
+// converting u32 indices to byte indices (4 bytes per element) via a loop,
+// which adds significant overhead. Scalar shuffle is faster for u32 types on ARM.
 
 // =============================================================================
 // Scalar/Portable Fallback Implementations

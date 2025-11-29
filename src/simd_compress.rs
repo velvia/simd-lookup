@@ -307,8 +307,8 @@ unsafe fn compress_u8x16_avx512(data: u8x16, mask: u16) -> u8x16 {
     }
 }
 
-/// Shuffle-based compress for u8x16.
 #[inline]
+
 fn compress_store_u8x16_shuffle(data: u8x16, mask: u16, dest: &mut [u8]) {
     let result = compress_u8x16_shuffle(data, mask);
     let count = mask.count_ones() as usize;
