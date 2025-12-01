@@ -390,6 +390,7 @@ use std::arch::x86_64::*;
 use std::arch::is_x86_feature_detected;
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn split_u32x16_avx512(input: u32x16) -> (u32x8, u32x8) {
     unsafe {
@@ -404,6 +405,7 @@ unsafe fn split_u32x16_avx512(input: u32x16) -> (u32x8, u32x8) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn split_u64x8_avx512(input: u64x8) -> (u64x4, u64x4) {
     unsafe {
@@ -418,6 +420,7 @@ unsafe fn split_u64x8_avx512(input: u64x8) -> (u64x4, u64x4) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn widen_u32x8_to_u64x8_avx512(input: u32x8) -> u64x8 {
     unsafe {
@@ -428,6 +431,7 @@ unsafe fn widen_u32x8_to_u64x8_avx512(input: u32x8) -> u64x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn widen_u32x8_to_u64x8_avx2(input: u32x8) -> u64x8 {
     unsafe {
@@ -446,6 +450,7 @@ unsafe fn widen_u32x8_to_u64x8_avx2(input: u32x8) -> u64x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn widen_u32x4_to_u64x4_avx2(input: u32x4) -> u64x4 {
     unsafe {
@@ -456,6 +461,7 @@ unsafe fn widen_u32x4_to_u64x4_avx2(input: u32x4) -> u64x4 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn u64x8_from_bitmask_avx512(mask: u8) -> u64x8 {
     unsafe {
@@ -465,6 +471,7 @@ unsafe fn u64x8_from_bitmask_avx512(mask: u8) -> u64x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn u64x8_from_bitmask_avx2(mask: u8) -> u64x8 {
     let mut values = [0u64; 8];
@@ -475,6 +482,7 @@ unsafe fn u64x8_from_bitmask_avx2(mask: u8) -> u64x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn u32x8_from_bitmask_avx512(mask: u8) -> u32x8 {
     unsafe {
@@ -484,6 +492,7 @@ unsafe fn u32x8_from_bitmask_avx512(mask: u8) -> u32x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn u32x8_from_bitmask_avx2(mask: u8) -> u32x8 {
     let mut values = [0u32; 8];
@@ -494,6 +503,7 @@ unsafe fn u32x8_from_bitmask_avx2(mask: u8) -> u32x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx2")]
 unsafe fn shuffle_u32x8_avx2(input: u32x8, indices: u32x8) -> u32x8 {
     unsafe {
@@ -505,6 +515,7 @@ unsafe fn shuffle_u32x8_avx2(input: u32x8, indices: u32x8) -> u32x8 {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "ssse3")]
 unsafe fn shuffle_u8x16_ssse3(input: u8x16, indices: u8x16) -> u8x16 {
     unsafe {
@@ -523,6 +534,7 @@ unsafe fn shuffle_u8x16_ssse3(input: u8x16, indices: u8x16) -> u8x16 {
 use std::arch::aarch64::*;
 
 #[cfg(target_arch = "aarch64")]
+#[inline]
 unsafe fn widen_u32x8_to_u64x8_neon(input: u32x8) -> u64x8 {
     let array = input.to_array();
     unsafe {
@@ -540,6 +552,7 @@ unsafe fn widen_u32x8_to_u64x8_neon(input: u32x8) -> u64x8 {
 }
 
 #[cfg(target_arch = "aarch64")]
+#[inline]
 unsafe fn widen_u32x4_to_u64x4_neon(input: u32x4) -> u64x4 {
     let array = input.to_array();
     unsafe {
@@ -553,6 +566,7 @@ unsafe fn widen_u32x4_to_u64x4_neon(input: u32x4) -> u64x4 {
 }
 
 #[cfg(target_arch = "aarch64")]
+#[inline]
 #[target_feature(enable = "neon")]
 unsafe fn widen_u32x4_to_u64x4_neon_raw(input: uint32x4_t) -> (uint64x2_t, uint64x2_t) {
     let low = vmovl_u32(vget_low_u32(input));
@@ -561,6 +575,7 @@ unsafe fn widen_u32x4_to_u64x4_neon_raw(input: uint32x4_t) -> (uint64x2_t, uint6
 }
 
 #[cfg(target_arch = "aarch64")]
+#[inline]
 unsafe fn u64x8_from_bitmask_neon(mask: u8) -> u64x8 {
     let mut values = [0u64; 8];
     for (i, value) in values.iter_mut().enumerate() {
@@ -570,6 +585,7 @@ unsafe fn u64x8_from_bitmask_neon(mask: u8) -> u64x8 {
 }
 
 #[cfg(target_arch = "aarch64")]
+#[inline]
 unsafe fn u32x8_from_bitmask_neon(mask: u8) -> u32x8 {
     let mut values = [0u32; 8];
     for (i, value) in values.iter_mut().enumerate() {
@@ -580,6 +596,7 @@ unsafe fn u32x8_from_bitmask_neon(mask: u8) -> u32x8 {
 
 /// NEON u8x16 shuffle using TBL instruction
 #[cfg(target_arch = "aarch64")]
+#[inline]
 unsafe fn shuffle_u8x16_neon(input: u8x16, indices: u8x16) -> u8x16 {
     unsafe {
         let arr = input.to_array();
@@ -606,6 +623,7 @@ unsafe fn shuffle_u8x16_neon(input: u8x16, indices: u8x16) -> u8x16 {
 /// SVE u32x4 shuffle using TBL instruction via inline assembly
 /// SVE TBL does element-wise table lookup with native u32 indices (no byte conversion needed)
 #[cfg(target_arch = "aarch64")]
+#[inline]
 #[target_feature(enable = "sve")]
 unsafe fn shuffle_u32x4_sve(input: u32x4, indices: u32x4) -> u32x4 {
     use std::arch::asm;
@@ -632,6 +650,7 @@ unsafe fn shuffle_u32x4_sve(input: u32x4, indices: u32x4) -> u32x4 {
 /// SVE u32x8 shuffle using TBL instruction via inline assembly
 /// Processes as two u32x4 halves
 #[cfg(target_arch = "aarch64")]
+#[inline]
 #[target_feature(enable = "sve")]
 unsafe fn shuffle_u32x8_sve(input: u32x8, indices: u32x8) -> u32x8 {
     use std::arch::asm;
@@ -690,18 +709,21 @@ fn split_u64x8_cast(input: u64x8) -> (u64x4, u64x4) {
 }
 
 #[allow(dead_code)]
+#[inline]
 fn widen_u32x8_to_u64x8_scalar(input: u32x8) -> u64x8 {
     let array = input.to_array();
     u64x8::from(array.map(|x| x as u64))
 }
 
 #[allow(dead_code)]
+#[inline]
 fn widen_u32x4_to_u64x4_scalar(input: u32x4) -> u64x4 {
     let array = input.to_array();
     u64x4::from(array.map(|x| x as u64))
 }
 
 #[allow(dead_code)]
+#[inline]
 fn u64x8_from_bitmask_scalar(mask: u8) -> u64x8 {
     let mut values = [0u64; 8];
     for (i, value) in values.iter_mut().enumerate() {
@@ -711,6 +733,7 @@ fn u64x8_from_bitmask_scalar(mask: u8) -> u64x8 {
 }
 
 #[allow(dead_code)]
+#[inline]
 fn u32x8_from_bitmask_scalar(mask: u8) -> u32x8 {
     let mut values = [0u32; 8];
     for (i, value) in values.iter_mut().enumerate() {
@@ -720,6 +743,7 @@ fn u32x8_from_bitmask_scalar(mask: u8) -> u32x8 {
 }
 
 #[allow(dead_code)]
+#[inline]
 fn shuffle_u32x8_scalar(input: u32x8, indices: u32x8) -> u32x8 {
     let arr = input.to_array();
     let idx = indices.to_array();
@@ -731,6 +755,7 @@ fn shuffle_u32x8_scalar(input: u32x8, indices: u32x8) -> u32x8 {
 }
 
 #[allow(dead_code)]
+#[inline]
 fn shuffle_u32x4_scalar(input: u32x4, indices: u32x4) -> u32x4 {
     let arr = input.to_array();
     let idx = indices.to_array();
@@ -742,6 +767,7 @@ fn shuffle_u32x4_scalar(input: u32x4, indices: u32x4) -> u32x4 {
 }
 
 #[allow(dead_code)]
+#[inline]
 fn shuffle_u8x16_scalar(input: u8x16, indices: u8x16) -> u8x16 {
     let arr = input.to_array();
     let idx = indices.to_array();

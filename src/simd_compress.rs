@@ -90,6 +90,7 @@ pub fn compress_u32x8(data: u32x8, mask: u8) -> (u32x8, usize) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f", enable = "avx512vl")]
 unsafe fn compress_store_u32x8_avx512(data: u32x8, mask: u8, dest: &mut [u32]) {
     unsafe {
@@ -99,6 +100,7 @@ unsafe fn compress_store_u32x8_avx512(data: u32x8, mask: u8, dest: &mut [u32]) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f", enable = "avx512vl")]
 unsafe fn compress_u32x8_avx512(data: u32x8, mask: u8) -> u32x8 {
     unsafe {
@@ -177,6 +179,7 @@ pub fn compress_u32x16(data: u32x16, mask: u16) -> (u32x16, usize) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn compress_store_u32x16_avx512(data: u32x16, mask: u16, dest: &mut [u32]) {
     unsafe {
@@ -186,6 +189,7 @@ unsafe fn compress_store_u32x16_avx512(data: u32x16, mask: u16, dest: &mut [u32]
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn compress_u32x16_avx512(data: u32x16, mask: u16) -> u32x16 {
     unsafe {
@@ -296,6 +300,7 @@ pub fn compress_u8x16(data: u8x16, mask: u16) -> (u8x16, usize) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512vbmi2", enable = "avx512vl")]
 unsafe fn compress_store_u8x16_avx512(data: u8x16, mask: u16, dest: &mut [u8]) {
     unsafe {
@@ -305,6 +310,7 @@ unsafe fn compress_store_u8x16_avx512(data: u8x16, mask: u16, dest: &mut [u8]) {
 }
 
 #[cfg(target_arch = "x86_64")]
+#[inline]
 #[target_feature(enable = "avx512vbmi2", enable = "avx512vl")]
 unsafe fn compress_u8x16_avx512(data: u8x16, mask: u16) -> u8x16 {
     unsafe {

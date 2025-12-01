@@ -23,6 +23,7 @@ pub struct Table64 {
 }
 
 impl Table64 {
+    #[inline]
     pub fn new(table: &[u8; 64]) -> Self {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {

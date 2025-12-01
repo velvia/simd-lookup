@@ -6,6 +6,7 @@ pub mod lookup;
 pub mod lookup_kernel;
 pub mod prefetch;
 pub mod simd_compress;
+pub mod simd_gather;
 pub mod table64;
 pub mod wide_utils;
 
@@ -22,6 +23,10 @@ pub use simd_compress::{
 };
 pub use wide_utils::{
     FromBitmask, SimdSplit, WideUtilsExt,
+};
+pub use simd_gather::{
+    gather_u32index_u8, gather_masked_u32index_u8,
+    gather_u32index_u32, gather_masked_u32index_u32,
 };
 
 #[cfg(test)]
