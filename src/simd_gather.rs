@@ -347,8 +347,7 @@ fn gather_u32index_u8_scalar(indices: u32x16, base: &[u8], scale: u8) -> u8x16 {
         result[i] = base[offset];
     }
 
-    // Safety: [u8; 16] has same layout as u8x16
-    unsafe { std::mem::transmute::<[u8; 16], u8x16>(result) }
+    u8x16::from(result)
 }
 
 /// Scalar fallback for gather_masked_u32index_u8
@@ -374,8 +373,7 @@ fn gather_masked_u32index_u8_scalar(
         }
     }
 
-    // Safety: [u8; 16] has same layout as u8x16
-    unsafe { std::mem::transmute::<[u8; 16], u8x16>(result) }
+    u8x16::from(result)
 }
 
 /// Scalar fallback for gather_u32index_u32
@@ -391,8 +389,7 @@ fn gather_u32index_u32_scalar(indices: u32x16, base: &[u32], scale: u8) -> u32x1
         result[i] = base[offset];
     }
 
-    // Safety: [u32; 16] has same layout as u32x16
-    unsafe { std::mem::transmute::<[u32; 16], u32x16>(result) }
+    u32x16::from(result)
 }
 
 /// Scalar fallback for gather_masked_u32index_u32
@@ -419,8 +416,7 @@ fn gather_masked_u32index_u32_scalar(
         }
     }
 
-    // Safety: [u32; 16] has same layout as u32x16
-    unsafe { std::mem::transmute::<[u32; 16], u32x16>(result) }
+    u32x16::from(result)
 }
 
 // =============================================================================

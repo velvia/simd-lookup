@@ -128,23 +128,23 @@ fn is_x86_avx512_vbmi() -> bool {
 fn scalar_lookup_1x16(table: &[u8; 64], idx: u8x16) -> u8x16 {
     let i = idx.to_array();
     debug_assert!(i.iter().all(|&x| x < 64));
-    let mut out = [0u8; 16];
-    // Manual unroll to encourage ILP.
-    out[0] = table[i[0] as usize];
-    out[1] = table[i[1] as usize];
-    out[2] = table[i[2] as usize];
-    out[3] = table[i[3] as usize];
-    out[4] = table[i[4] as usize];
-    out[5] = table[i[5] as usize];
-    out[6] = table[i[6] as usize];
-    out[7] = table[i[7] as usize];
-    out[8] = table[i[8] as usize];
-    out[9] = table[i[9] as usize];
-    out[10] = table[i[10] as usize];
-    out[11] = table[i[11] as usize];
-    out[12] = table[i[12] as usize];
-    out[13] = table[i[13] as usize];
-    out[14] = table[i[14] as usize];
-    out[15] = table[i[15] as usize];
+    let out = [
+        table[i[0] as usize],
+        table[i[1] as usize],
+        table[i[2] as usize],
+        table[i[3] as usize],
+        table[i[4] as usize],
+        table[i[5] as usize],
+        table[i[6] as usize],
+        table[i[7] as usize],
+        table[i[8] as usize],
+        table[i[9] as usize],
+        table[i[10] as usize],
+        table[i[11] as usize],
+        table[i[12] as usize],
+        table[i[13] as usize],
+        table[i[14] as usize],
+        table[i[15] as usize],
+    ];
     u8x16::from(out)
 }

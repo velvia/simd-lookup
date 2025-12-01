@@ -197,6 +197,6 @@ impl SliceU8SIMDExtender for &mut [u8] {
     // }
     #[inline(always)]
     fn write_u8x16(&mut self, index: usize, value: u8x16, slice_len: usize) {
-        self[index..index + slice_len].copy_from_slice(&value.as_array()[..slice_len]);
+        self[index..index + slice_len].copy_from_slice(&value.to_array()[..slice_len]);
     }
 }

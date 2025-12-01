@@ -534,7 +534,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
         // Process full chunks
         for (i, chunk2) in chunks2.iter().enumerate() {
             let vocab1_result = self.temp_buffer[i];
-            let vocab1_array = vocab1_result.as_array();
+            let vocab1_array = vocab1_result.to_array();
 
             // Only do lookup2 for positions where vocab1_result is nonzero
             // Use two u64 loops, somehow it's faster than writing to [u8; 16] directly.
@@ -569,7 +569,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
         if !rest2.is_empty() {
             // The remainder for vocab1 is already in temp_buffer (lookup_extend_u8x16_vec handles it)
             let vocab1_result = self.temp_buffer[chunks2.len()];
-            let vocab1_array = vocab1_result.as_array();
+            let vocab1_array = vocab1_result.to_array();
             let mut vocab2_result = [0u8; 16];
 
             for i in 0..rest2.len() {
