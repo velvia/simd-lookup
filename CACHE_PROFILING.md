@@ -1,6 +1,6 @@
 # Cache Profiling Guide
 
-This guide explains how to profile cache hits and misses for the simd-lookup benchmarks. Cache profiling is crucial for understanding why dual vocabulary lookups are slower and how bit-packing helps.
+This guide explains how to profile cache hits and misses for the simd-lookup benchmarks. Cache profiling is crucial for understanding why dual table lookups are slower and how bit-packing helps.
 
 ## Why Cache Profiling?
 
@@ -11,7 +11,7 @@ Your benchmarks show that:
 
 Cache profiling helps you:
 1. Verify cache miss rates for different table sizes
-2. Understand why dual vocab (30MB) is slow
+2. Understand why dual table (30MB) is slow
 3. Confirm that bit-packing (7MB) reduces cache misses
 4. Optimize memory access patterns
 
@@ -28,7 +28,7 @@ The easiest way is to use Docker with the provided setup. **Run this from your m
 # docker build -f Dockerfile.perf -t simd-lookup-perf .
 
 # Run cache profiling (from macOS host - no need to enter container)
-./scripts/docker_perf.sh single_vocab_lookup 10
+./scripts/docker_perf.sh single_table_lookup 10
 ```
 
 **Note**: You run `docker_perf.sh` from your host machine (macOS). It automatically:
@@ -41,7 +41,7 @@ If you want to manually use the other scripts inside the container:
 ```bash
 ./scripts/docker_perf.sh interactive
 # Now you're inside the container and can run:
-# ./scripts/perf_cache_profile.sh lookup_kernel_bench single_vocab_lookup 10
+# ./scripts/perf_cache_profile.sh lookup_kernel_bench single_table_lookup 10
 ```
 
 ### Quick Start: Native Linux
@@ -60,10 +60,10 @@ sudo pacman -S perf              # Arch Linux
 sudo sysctl kernel.perf_event_paranoid=-1
 
 # Run cache profiling directly
-./scripts/perf_cache_profile.sh lookup_kernel_bench single_vocab_lookup 10
+./scripts/perf_cache_profile.sh lookup_kernel_bench single_table_lookup 10
 
 # Or for detailed function-level analysis
-./scripts/perf_record_cache.sh lookup_kernel_bench single_vocab_lookup 10
+./scripts/perf_record_cache.sh lookup_kernel_bench single_table_lookup 10
 ```
 
 **Note**: On native Linux, you can run these scripts directly - no Docker needed!
@@ -93,7 +93,7 @@ L3 miss rate = LLC-load-misses / LLC-loads
 For function-level cache analysis:
 
 ```bash
-./scripts/perf_record_cache.sh lookup_kernel_bench single_vocab_lookup 10
+./scripts/perf_record_cache.sh lookup_kernel_bench single_table_lookup 10
 
 # Then analyze
 perf report --stdio --sort=symbol,cache-misses
@@ -121,7 +121,7 @@ This means Instruments wants PMC counters but the system is configured for user 
 #### Solution 1: Run with sudo (may help)
 
 ```bash
-sudo cargo instruments -t M1_CPUCounters_Profiler --bench lookup_kernel_bench -- --bench single_vocab_lookup --profile-time 200
+sudo cargo instruments -t M1_CPUCounters_Profiler --bench lookup_kernel_bench -- --bench single_table_lookup --profile-time 200
 ```
 
 #### Solution 2: Use System Trace instead
@@ -129,7 +129,7 @@ sudo cargo instruments -t M1_CPUCounters_Profiler --bench lookup_kernel_bench --
 System Trace may provide cache information without PMC issues:
 
 ```bash
-cargo instruments -t "System Trace" --bench lookup_kernel_bench -- --bench single_vocab_lookup --profile-time 200
+cargo instruments -t "System Trace" --bench lookup_kernel_bench -- --bench single_table_lookup --profile-time 200
 ```
 
 #### Solution 3: Check Instruments Template
@@ -177,22 +177,22 @@ In Instruments, look for:
 1. **Profile single 3MB table** (baseline - should fit in cache):
    ```bash
    # Modify benchmark to use 3MB table, then:
-   ./scripts/perf_cache_profile.sh lookup_kernel_bench single_vocab_lookup 10
+   ./scripts/perf_cache_profile.sh lookup_kernel_bench single_table_lookup 10
    ```
 
 2. **Profile single 15MB table** (should have cache misses):
    ```bash
-   ./scripts/perf_cache_profile.sh lookup_kernel_bench single_vocab_lookup 10
+   ./scripts/perf_cache_profile.sh lookup_kernel_bench single_table_lookup 10
    ```
 
 3. **Profile dual 30MB tables** (should have many cache misses):
    ```bash
-   ./scripts/perf_cache_profile.sh lookup_kernel_bench dual_vocab_lookup_v2 10
+   ./scripts/perf_cache_profile.sh lookup_kernel_bench dual_table_lookup_v2 10
    ```
 
 4. **Profile dual 7MB bit-packed** (should have fewer cache misses):
    ```bash
-   ./scripts/perf_cache_profile.sh bitpacked_bench dual_vocab_comparison 10
+   ./scripts/perf_cache_profile.sh bitpacked_bench dual_table_comparison 10
    ```
 
 5. **Compare results**:

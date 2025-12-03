@@ -1,14 +1,15 @@
-//! Arrow-style "lookup kernel" similar to arrow=select::take::take kernel.
-//! It does not do SIMD gather, rather relying on the speed on scalar lookups which are "in a row".
-//! However, it does allow for SIMD processing of gathered u8x16 words.
+//! Arrow-style "lookup kernel" similar to arrow-select::take::take kernel.
+//! There are "columnar style" which does table lookups for one table first, and then cascading to another table,
+//! and the Cascading kernel uses SIMD extensively.
+//! Other kernels just do scalar lookups which are often as fast as SIMD GATHER, but all allow SIMD functions to
+//! operate on looked up values.
 //!
 //! Anecdotally, this is not really faster than SIMD gather.
 //!
 //! ----------------- SIMD based lookup kernels - "Arrow" style ------------------------------------
 //! These operate by leveraging constant-sized array reads from a slice with SIMD operations on looked up values,
-//! especially fast for multiple vocabulary lookups and combinations thereof.
-//! It turns out these don't significantly improve on a series of scalar lookups.  Also, I forgot that we need to
-//! respect the SeriesIndex on input, as that may be used for series/time filtering.  So these don't really work.
+//! especially fast for multiple table lookups and combinations thereof.
+//! It turns out these don't significantly improve on a series of scalar lookups.
 
 use wide::{u8x16, u32x16};
 
@@ -43,7 +44,7 @@ fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> [u8; 16] {
     ]
 }
 
-/// Single vocabulary lookup kernel with SIMD function - u32 to u8 lookup table kernel
+/// Single table lookup kernel with SIMD function - u32 to u8 lookup table kernel.
 /// The user is responsible for generating the lookup table - so this can be used for different use cases, including
 /// CASE..WHEN and bitmasking/filtering.
 ///
@@ -52,16 +53,16 @@ fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> [u8; 16] {
 /// However, we look up 16 values at a time for efficiency.  This kernel makes sense to call on hundreds or thousands
 /// of values at a time, columnar style.
 ///
-/// Note: for general purpose vocab_expr where the lookup can be any type, instead just use `arrow::compute::take()`
+/// Note: for general purpose expressions where the lookup can be any type, instead just use `arrow::compute::take()`
 /// to do a very efficient lookup where the lookup table can be any type, but then you pay the cost of write memory
 /// I/O.  These kernels here allow user to operate on each looked up u8x16 and do something.
 ///
 #[derive(Debug, Clone)]
-pub struct SimdSingleVocabU32U8Lookup<'a> {
+pub struct SimdSingleTableU32U8Lookup<'a> {
     lookup_table: &'a [u8],
 }
 
-impl<'a> SimdSingleVocabU32U8Lookup<'a> {
+impl<'a> SimdSingleTableU32U8Lookup<'a> {
     #[inline]
     pub fn new(lookup_table: &'a [u8]) -> Self {
         Self { lookup_table }
@@ -152,7 +153,7 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     /// - `indices` - Vec<u32> of indices of the nonzero results
     ///
     /// This method is intended to be used with the cascading SIMD kernels which extend lookup into two or more
-    /// vocabularies by leveraging the nonzero output to do packed lookups into the second vocabulary.
+    /// tables by leveraging the nonzero output to do packed lookups into the second table.
     ///
     /// ## Arguments
     /// - `values` - &[u32] of indices to lookup
@@ -209,7 +210,7 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
     }
 }
 
-/// Pipelined single vocabulary lookup kernel - u32 to u8 lookup table kernel with prefetch pipelining
+/// Pipelined single table lookup kernel - u32 to u8 lookup table kernel with prefetch pipelining
 ///
 /// This version pipelines prefetch operations with the actual lookup work to hide memory latency.
 /// The algorithm works as follows:
@@ -219,12 +220,15 @@ impl<'a> SimdSingleVocabU32U8Lookup<'a> {
 /// 4. Loop to next chunk
 ///
 /// This pipelining allows memory prefetch latency to be hidden behind computation work.
+///
+/// Results: End Nov 2025: On Intel boxes this gives slight advantage - maybe up to 5%.  Regular scalar reads
+/// though, even with large random Lookup tables, are done well enough that this doesn't help much.
 #[derive(Debug, Clone)]
-pub struct PipelinedSingleVocabU32U8Lookup<'a> {
+pub struct PipelinedSingleTableU32U8Lookup<'a> {
     lookup_table: &'a [u8],
 }
 
-impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
+impl<'a> PipelinedSingleTableU32U8Lookup<'a> {
     #[inline]
     pub fn new(lookup_table: &'a [u8]) -> Self {
         Self { lookup_table }
@@ -326,22 +330,23 @@ impl<'a> PipelinedSingleVocabU32U8Lookup<'a> {
     }
 }
 
-/// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
-/// It always does a lookup of the second table.
-/// This is perfect for event_value + page_screen combined lookup functions.
-/// It is faster than combining multiple single vocabulary lookups due to SIMD combining function.
+/// Dual lookup table kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
 /// Second lookup table is only looked up if the first lookup table returns a non-zero value.
+/// The lookup functions are scalar and other than the SIMD combining function, no SIMD is used - and the code is
+/// very simple, so this function is a good fit for non-AVX architectures (like Apple M*) where faster SIMD
+/// instructions like VCOMPRESS are not available.
+/// OTOH, for Intel/AVX512+ architectures, the [CascadingTableU32U8Lookup] kernel is faster.
 ///
 /// The user is responsible for generating the lookup tables - so this can be used for different use cases, including
 /// CASE..WHEN and bitmasking/filtering.
 #[derive(Debug, Clone)]
-pub struct SimdDualVocabU32U8Lookup<'a> {
+pub struct SimdDualTableU32U8Lookup<'a> {
     lookup_table1: &'a [u8],
     lookup_table2: &'a [u8],
 }
 
-impl<'a> SimdDualVocabU32U8Lookup<'a> {
-    /// Creates a new dual vocabulary lookup kernel with the given lookup tables.
+impl<'a> SimdDualTableU32U8Lookup<'a> {
+    /// Creates a new dual table lookup kernel with the given lookup tables.
     #[inline]
     pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a [u8]) -> Self {
         Self {
@@ -401,7 +406,7 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     /// and extends the combined results into a Vec (pushing all combined results)
     ///
     /// The combiner function `f` takes two u8x16 values (looked up from table1 and table2) and returns a combined u8x16.
-    /// Unlike the single vocabulary version, this dual vocabulary version requires a combiner function.
+    /// Unlike the single table version, this dual table version requires a combiner function.
     #[inline]
     pub fn lookup_into_vec<F>(
         &self,
@@ -435,7 +440,7 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
 }
 
 // =================================================================================================
-// REMOVED: SimdJoinedDualVocabU32U8Lookup
+// REMOVED: SimdJoinedDualTableU32U8Lookup
 // =================================================================================================
 //
 // This kernel was an experiment testing whether TLB swaps or non-colocated lookup tables could be
@@ -454,33 +459,35 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
 //
 // **Benchmark Results:**
 // In testing on both Intel (AVX-512) and ARM (Apple Silicon) platforms, the joined table design
-// showed NO appreciable performance wins compared to the non-joined `SimdDualVocabU32U8Lookup`.
+// showed NO appreciable performance wins compared to the non-joined `SimdDualTableU32U8Lookup`.
 // The TLB hypothesis did not hold in practice - modern CPUs handle multiple large allocations
 // efficiently, and the offset arithmetic adds minor overhead that offsets any potential gains.
 //
 // The non-joined design is simpler and equally performant, so this kernel was removed.
 // =================================================================================================
 
-/// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
-/// It tries to eliminate thrashing by using internally the single vocab kernel to write results out first to
-/// a local temporary buffer, which is saved, then it looks up the second vocabulary, only if the first vocab returns
-/// nonzero results - thus minimizing the number of reads from the second vocabulary.
+/// Dual table lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
+/// It tries to eliminate thrashing by using internally the single table kernel to write results out first to
+/// a local temporary buffer, which is saved, then it looks up the second table, only if the first table returns
+/// nonzero results - thus minimizing the number of reads from the second table.
 /// By sequencing in this order, we hope to minimize the cache thrashing.
 ///
 /// The user is responsible for generating the lookup tables - so this can be used for different use cases, including
 /// CASE..WHEN and bitmasking/filtering.
+/// NOTE: this is not as efficient as the newer CascadingTableU32U8Lookup kernel.
+/// TODO: deprecate and remove this kernel.  It doesn't really have advantages over the others.
 #[derive(Debug, Clone)]
-pub struct SimdDualVocabU32U8LookupV2<'a> {
-    lookup1: SimdSingleVocabU32U8Lookup<'a>,
+pub struct SimdDualTableU32U8LookupV2<'a> {
+    lookup1: SimdSingleTableU32U8Lookup<'a>,
     lookup2: &'a [u8],
     temp_buffer: Vec<u8x16>,
 }
 
-impl<'a> SimdDualVocabU32U8LookupV2<'a> {
+impl<'a> SimdDualTableU32U8LookupV2<'a> {
     #[inline]
     pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a [u8]) -> Self {
         Self {
-            lookup1: SimdSingleVocabU32U8Lookup::new(lookup_table1),
+            lookup1: SimdSingleTableU32U8Lookup::new(lookup_table1),
             lookup2: lookup_table2,
             temp_buffer: Vec::with_capacity(128),
         }
@@ -510,7 +517,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
         // Clear temp_buffer for reuse
         self.temp_buffer.clear();
 
-        // First read the first vocabulary into the temporary buffer
+        // First read the first table into the temporary buffer
         self.lookup1
             .lookup_extend_u8x16_vec(values1, &mut self.temp_buffer);
 
@@ -518,10 +525,10 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
 
         // Process full chunks
         for (i, chunk2) in chunks2.iter().enumerate() {
-            let vocab1_result = self.temp_buffer[i];
-            let vocab1_array = vocab1_result.to_array();
+            let table1_result = self.temp_buffer[i];
+            let table1_array = table1_result.to_array();
 
-            // Only do lookup2 for positions where vocab1_result is nonzero
+            // Only do lookup2 for positions where table1_result is nonzero
             // Use two u64 loops, somehow it's faster than writing to [u8; 16] directly.
             let local_chunk = *chunk2;
 
@@ -529,7 +536,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             let mut result_high = 0u64;
             for j in (8..16).rev() {
                 result_high <<= 8;
-                if vocab1_array[j] != 0 {
+                if table1_array[j] != 0 {
                     result_high += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
@@ -538,7 +545,7 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             let mut result_low = 0u64;
             for j in (0..8).rev() {
                 result_low <<= 8;
-                if vocab1_array[j] != 0 {
+                if table1_array[j] != 0 {
                     result_low += self.lookup2[local_chunk[j] as usize] as u64;
                 }
             }
@@ -547,28 +554,28 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
             let result = ((result_high as u128) << 64) | (result_low as u128);
 
             // Call user function with both u8x16 results
-            (f)(vocab1_result, u8x16::from(result.to_le_bytes()), 16);
+            (f)(table1_result, u8x16::from(result.to_le_bytes()), 16);
         }
 
         // Handle the remainder
         if !rest2.is_empty() {
-            // The remainder for vocab1 is already in temp_buffer (lookup_extend_u8x16_vec handles it)
-            let vocab1_result = self.temp_buffer[chunks2.len()];
-            let vocab1_array = vocab1_result.to_array();
-            let mut vocab2_result = [0u8; 16];
+            // The remainder for table1 is already in temp_buffer (lookup_extend_u8x16_vec handles it)
+            let table1_result = self.temp_buffer[chunks2.len()];
+            let table1_array = table1_result.to_array();
+            let mut table2_result = [0u8; 16];
 
             for i in 0..rest2.len() {
-                if vocab1_array[i] != 0 {
-                    // Only lookup if the first vocab returned nonzero
-                    vocab2_result[i] = self.lookup2[rest2[i] as usize];
+                if table1_array[i] != 0 {
+                    // Only lookup if the first table returned nonzero
+                    table2_result[i] = self.lookup2[rest2[i] as usize];
                 }
             }
-            (f)(vocab1_result, u8x16::from(vocab2_result), rest2.len());
+            (f)(table1_result, u8x16::from(table2_result), rest2.len());
         }
     }
 }
 
-/// Dual vocabulary lookup kernel using FxHashMap for table2.
+/// Dual table lookup kernel using FxHashMap for table2.
 ///
 /// This kernel is optimized for the case where table2 has a very small number of entries
 /// (sparse), making a hash map lookup more memory-efficient than a full lookup table.
@@ -577,16 +584,18 @@ impl<'a> SimdDualVocabU32U8LookupV2<'a> {
 /// - Table1: Standard `&[u8]` lookup table (can be large)
 /// - Table2: `FxHashMap<u32, u8>` (optimized for sparse data with fast hashing)
 ///
-/// The lookup behavior is the same as `SimdDualVocabU32U8Lookup`:
+/// The lookup behavior is the same as `SimdDualTableU32U8Lookup`:
 /// - Table2 is only looked up if table1 returns a non-zero value
 /// - Results are passed to the user function as (u8x16, u8x16, num_bytes)
-pub struct SimdDualVocabWithHashLookup<'a> {
+///
+/// UPDATE: Testing on Intel Xeon shows that this kernel is maybe 20% slower than the V2 kernel with an optimized writer.
+pub struct SimdDualTableWithHashLookup<'a> {
     lookup_table1: &'a [u8],
     lookup_table2: &'a FxHashMap<u32, u8>,
 }
 
-impl<'a> SimdDualVocabWithHashLookup<'a> {
-    /// Creates a new dual vocabulary lookup kernel with table1 as a slice and table2 as FxHashMap.
+impl<'a> SimdDualTableWithHashLookup<'a> {
+    /// Creates a new dual table lookup kernel with table1 as a slice and table2 as FxHashMap.
     #[inline]
     pub fn new(lookup_table1: &'a [u8], lookup_table2: &'a FxHashMap<u32, u8>) -> Self {
         Self {
@@ -673,29 +682,32 @@ impl<'a> SimdDualVocabWithHashLookup<'a> {
     }
 }
 
-/// SIMD "Cascading" 2nd/3rd Vocab Lookup Kernel
+/// SIMD "Cascading" 2nd/3rd Table Lookup Kernel
 ///
-/// This kernel is designed to "cascade" and build on top of the primary SingleVocab kernel to efficiently look up
-/// secondary or nonprimary vocabularies.  How does this work?
-/// - First call [SimdSingleVocabU32U8Lookup] to look up the primary vocabulary, using the
+/// This kernel is designed to "cascade" and build on top of the primary SingleTable kernel to efficiently look up
+/// secondary or additional tables.  How does this work?
+/// - First call [SimdSingleTableU32U8Lookup] to look up the primary table, using the
 ///   `lookup_compress_into_nonzeroes()` method.  This returns compressed results and indices of the nonzero results.
 /// - Now feed these Vecs into this kernel, which uses compressed output to do a packed lookup into the second
-///   vocabulary.  This is faster than having to filter all the results from the first kernel.
-/// - The lookup function is called for nonzero Vocab1 results and looked up second vocab lookups, and should
+///   table.  This is faster than having to filter all the results from the first kernel.
+/// - The lookup function is called for nonzero table1 results and looked up second table lookups, and should
 ///   return results for all 16 values in the u8x16.
 /// - Then, this kernel will COMPRESS the results and again output nonzero results and indices, filtered from the
 ///   input.
 ///
-/// Basically, this kernel can be cascaded for additional vocabularies.
+/// Basically, this kernel can be cascaded for additional tables.
 ///
 /// The theory is that this cascading and packed lookup approach allows us to come closest to kernels where
-/// even with multiple vocabularies, the runtime is roughly O(num_nonzero_lookups).
+/// even with multiple tables, the runtime is roughly O(num_nonzero_lookups).
+/// UPDATE 12/2/2025: Intel Xeon results show that, even at huge (15M) tables, this results in a 40% speedup over
+///   the V2 kernel.  The speedups increase for smaller table sizes - 4M shows over 50% increase, and even bigger
+///   for smaller tables - which shows that this design inherently scales well.
 #[derive(Debug, Clone)]
-pub struct SimdCascadingVocabU32U8Lookup<'a> {
+pub struct SimdCascadingTableU32U8Lookup<'a> {
     lookup_table: &'a [u8],
 }
 
-impl<'a> SimdCascadingVocabU32U8Lookup<'a> {
+impl<'a> SimdCascadingTableU32U8Lookup<'a> {
     #[inline]
     pub fn new(lookup_table: &'a [u8]) -> Self {
         Self { lookup_table }
@@ -703,17 +715,17 @@ impl<'a> SimdCascadingVocabU32U8Lookup<'a> {
 
     /// Given a slice of u32 values, looks up each one.
     /// Designed to work in cascading mode.  One needs to pass in the nonzero_results and indices output from
-    /// [SimdSingleVocabU32U8Lookup]::lookup_compress_into_nonzeroes(), along with the values (which are the word IDs
-    /// for the vocabulary/lookup table in this struct).
+    /// [SimdSingleTableU32U8Lookup]::lookup_compress_into_nonzeroes(), along with the values (which are the keys
+    /// for the lookup table in this struct).
     ///
     /// For this to be efficient, the length of values probably should be at least hundreds or thousands of values.
     ///
     /// ## Arguments
     /// - `values` - &[u32] of indices to lookup.  NOTE: these are ORIGINAL values, NOT filtered, thus
-    ///   its length should be the same length as the values fed into [SimdSingleVocabU32U8Lookup] kernel.
+    ///   its length should be the same length as the values fed into [SimdSingleTableU32U8Lookup] kernel.
     ///   In other words, the length of values will probably be larger than in_nonzero_results.
-    /// - `in_nonzero_results` - &[u8] of nonzero results from [SimdSingleVocabU32U8Lookup]::lookup_compress_into_nonzeroes()
-    /// - `in_indices` - &[u32] of indices from [SimdSingleVocabU32U8Lookup]::lookup_compress_into_nonzeroes()
+    /// - `in_nonzero_results` - &[u8] of nonzero results from [SimdSingleTableU32U8Lookup]::lookup_compress_into_nonzeroes()
+    /// - `in_indices` - &[u32] of indices from [SimdSingleTableU32U8Lookup]::lookup_compress_into_nonzeroes()
     ///   These indices should be indices into the values array.
     /// - `f` - function to mix the results from nonzero_results and the looked up values from this lookup table.
     ///         The results (u8x16) returned from this function, will be zero-compressed along with indices to
@@ -811,7 +823,7 @@ impl<'a> SimdCascadingVocabU32U8Lookup<'a> {
 // DESIGN SKETCH: Bitmap-Based Cascading Lookup (Alternative to Index-Based Design)
 // =================================================================================================
 //
-// The current `SimdCascadingVocabU32U8Lookup` outputs explicit `Vec<u32>` indices alongside results.
+// The current `SimdCascadingTableU32U8Lookup` outputs explicit `Vec<u32>` indices alongside results.
 // An alternative design could output **bitmaps** instead of indices, which may be advantageous in
 // certain scenarios.
 //
@@ -927,10 +939,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pipelined_single_vocab_lookup_basic() {
+    fn test_pipelined_single_table_lookup_basic() {
         // Create a simple lookup table: index -> index as u8
         let lookup_table: Vec<u8> = (0..256).map(|i| i as u8).collect();
-        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+        let pipelined_lookup = PipelinedSingleTableU32U8Lookup::new(&lookup_table);
 
         // Test with exactly 16 values (one chunk)
         let values = vec![
@@ -947,10 +959,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pipelined_single_vocab_lookup_multiple_chunks() {
+    fn test_pipelined_single_table_lookup_multiple_chunks() {
         // Create a simple lookup table
         let lookup_table: Vec<u8> = (0..256).map(|i| i as u8).collect();
-        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+        let pipelined_lookup = PipelinedSingleTableU32U8Lookup::new(&lookup_table);
 
         // Test with 35 values (2 full chunks + 3 remainder)
         let values: Vec<u32> = (1..36).collect();
@@ -965,10 +977,10 @@ mod tests {
     }
 
     #[test]
-    fn test_pipelined_single_vocab_lookup_into_vec() {
+    fn test_pipelined_single_table_lookup_into_vec() {
         // Create a lookup table where each index maps to its double (mod 256)
         let lookup_table: Vec<u8> = (0..256).map(|i| ((i * 2) % 256) as u8).collect();
-        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+        let pipelined_lookup = PipelinedSingleTableU32U8Lookup::new(&lookup_table);
 
         let values = vec![1u32, 2, 3, 4, 5, 100, 150, 200];
         let mut buffer = Vec::new();
@@ -983,8 +995,8 @@ mod tests {
         // Test that pipelined version produces same results as original
         let lookup_table: Vec<u8> = (0..256).map(|i| (i ^ 0xAA) as u8).collect();
 
-        let original_lookup = SimdSingleVocabU32U8Lookup::new(&lookup_table);
-        let pipelined_lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+        let original_lookup = SimdSingleTableU32U8Lookup::new(&lookup_table);
+        let pipelined_lookup = PipelinedSingleTableU32U8Lookup::new(&lookup_table);
 
         // Test with various sizes
         for size in [5, 16, 17, 32, 33, 100] {
@@ -1005,10 +1017,10 @@ mod tests {
     }
 
     #[test]
-    fn test_single_vocab_lookup_into_vec() {
+    fn test_single_table_lookup_into_vec() {
         // Create a simple lookup table
         let lookup_table = vec![0u8, 10, 20, 30, 40];
-        let lookup = SimdSingleVocabU32U8Lookup::new(&lookup_table);
+        let lookup = SimdSingleTableU32U8Lookup::new(&lookup_table);
 
         // Test with values that are less than lookup table size
         let values = vec![0u32, 1, 2, 3, 4, 1, 2, 3];
@@ -1027,11 +1039,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_lookup_into_vec() {
+    fn test_dual_table_lookup_into_vec() {
         // Create two simple lookup tables
         let lookup_table1 = vec![0u8, 1, 2, 3, 4];
         let lookup_table2 = vec![0u8, 10, 20, 30, 40];
-        let lookup = SimdDualVocabU32U8Lookup::new(&lookup_table1, &lookup_table2);
+        let lookup = SimdDualTableU32U8Lookup::new(&lookup_table1, &lookup_table2);
 
         // Test with values that are less than lookup table size
         let values1 = vec![0u32, 1, 2, 3, 4, 1, 2, 3];
@@ -1053,11 +1065,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_lookup_into_vec_large() {
+    fn test_dual_table_lookup_into_vec_large() {
         // Test with a larger dataset that spans multiple u8x16 chunks
         let lookup_table1 = vec![1u8; 100];
         let lookup_table2 = vec![2u8; 100];
-        let lookup = SimdDualVocabU32U8Lookup::new(&lookup_table1, &lookup_table2);
+        let lookup = SimdDualTableU32U8Lookup::new(&lookup_table1, &lookup_table2);
 
         // Create 50 values (more than 16, so it tests multiple chunks)
         let values1 = vec![0u32; 50];
@@ -1075,23 +1087,23 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_v2_lookup_func_basic() {
+    fn test_dual_table_v2_lookup_func_basic() {
         // Create two simple lookup tables
         let lookup_table1 = vec![0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let lookup_table2 = vec![0u8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // Test with values that are less than lookup table size
         let values1 = vec![0u32, 1, 2, 3, 4];
         let values2 = vec![1u32, 2, 3, 4, 5];
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
         let mut num_bytes_list = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
             num_bytes_list.push(num_bytes);
         });
 
@@ -1099,41 +1111,41 @@ mod tests {
         assert_eq!(num_bytes_list.len(), 1);
         assert_eq!(num_bytes_list[0], 5);
 
-        // Check vocab1 results
-        let v1_array = vocab1_results[0].as_array();
+        // Check table1 results
+        let v1_array = table1_results[0].as_array();
         assert_eq!(v1_array[0], 0);
         assert_eq!(v1_array[1], 1);
         assert_eq!(v1_array[2], 2);
         assert_eq!(v1_array[3], 3);
         assert_eq!(v1_array[4], 4);
 
-        // Check vocab2 results - should only be looked up where vocab1 is nonzero
-        let v2_array = vocab2_results[0].as_array();
-        assert_eq!(v2_array[0], 0); // vocab1[0] == 0, so vocab2[0] should be 0 (not looked up)
-        assert_eq!(v2_array[1], 20); // vocab1[1] == 1 (nonzero), so vocab2[1] == lookup_table2[values2[1]] == lookup_table2[2] == 20
-        assert_eq!(v2_array[2], 30); // vocab1[2] == 2 (nonzero), so vocab2[2] == lookup_table2[values2[2]] == lookup_table2[3] == 30
-        assert_eq!(v2_array[3], 40); // vocab1[3] == 3 (nonzero), so vocab2[3] == lookup_table2[values2[3]] == lookup_table2[4] == 40
-        assert_eq!(v2_array[4], 50); // vocab1[4] == 4 (nonzero), so vocab2[4] == lookup_table2[values2[4]] == lookup_table2[5] == 50
+        // Check table2 results - should only be looked up where table1 is nonzero
+        let v2_array = table2_results[0].as_array();
+        assert_eq!(v2_array[0], 0); // table1[0] == 0, so table2[0] should be 0 (not looked up)
+        assert_eq!(v2_array[1], 20); // table1[1] == 1 (nonzero), so table2[1] == lookup_table2[values2[1]] == lookup_table2[2] == 20
+        assert_eq!(v2_array[2], 30); // table1[2] == 2 (nonzero), so table2[2] == lookup_table2[values2[2]] == lookup_table2[3] == 30
+        assert_eq!(v2_array[3], 40); // table1[3] == 3 (nonzero), so table2[3] == lookup_table2[values2[3]] == lookup_table2[4] == 40
+        assert_eq!(v2_array[4], 50); // table1[4] == 4 (nonzero), so table2[4] == lookup_table2[values2[4]] == lookup_table2[5] == 50
     }
 
     #[test]
-    fn test_dual_vocab_v2_lookup_func_remainder() {
+    fn test_dual_table_v2_lookup_func_remainder() {
         // Test remainder handling - values that don't divide evenly into 16
         let lookup_table1 = vec![0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let lookup_table2 = vec![0u8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // Create 25 values (16 + 9 remainder)
         let values1: Vec<u32> = (0..25).map(|i| (i % 5) as u32).collect();
         let values2: Vec<u32> = (0..25).map(|i| ((i % 5) + 1) as u32).collect();
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
         let mut num_bytes_list = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
             num_bytes_list.push(num_bytes);
         });
 
@@ -1143,8 +1155,8 @@ mod tests {
         assert_eq!(num_bytes_list[1], 9);
 
         // Check first chunk (full 16)
-        let v1_chunk0 = vocab1_results[0].as_array();
-        let v2_chunk0 = vocab2_results[0].as_array();
+        let v1_chunk0 = table1_results[0].as_array();
+        let v2_chunk0 = table2_results[0].as_array();
         for i in 0..16 {
             let expected_v1 = lookup_table1[values1[i] as usize];
             assert_eq!(v1_chunk0[i], expected_v1);
@@ -1156,8 +1168,8 @@ mod tests {
         }
 
         // Check remainder chunk (9 elements)
-        let v1_remainder = vocab1_results[1].as_array();
-        let v2_remainder = vocab2_results[1].as_array();
+        let v1_remainder = table1_results[1].as_array();
+        let v2_remainder = table2_results[1].as_array();
         for i in 0..9 {
             let expected_v1 = lookup_table1[values1[16 + i] as usize];
             assert_eq!(v1_remainder[i], expected_v1);
@@ -1175,71 +1187,71 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_v2_lookup_func_zero_filtering() {
-        // Test that lookup2 is only performed when vocab1 is nonzero
+    fn test_dual_table_v2_lookup_func_zero_filtering() {
+        // Test that lookup2 is only performed when table1 is nonzero
         let lookup_table1 = vec![0u8, 0, 0, 5, 0, 0, 0, 10, 0, 0, 0];
         let lookup_table2 = vec![0u8, 100, 200, 50, 150, 250, 60, 70, 80, 90, 100];
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // values1 will map to indices that are mostly zero in lookup_table1
         let values1 = vec![0u32, 1, 2, 3, 4, 5, 6, 7];
         let values2 = vec![1u32, 2, 3, 4, 5, 6, 7, 8]; // These would normally map to 100, 200, etc.
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, _num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
         });
 
-        let v1_array = vocab1_results[0].as_array();
-        let v2_array = vocab2_results[0].as_array();
+        let v1_array = table1_results[0].as_array();
+        let v2_array = table2_results[0].as_array();
 
-        // Check that vocab2 is only looked up where vocab1 is nonzero
+        // Check that table2 is only looked up where table1 is nonzero
         assert_eq!(v1_array[0], 0);
-        assert_eq!(v2_array[0], 0); // vocab1[0] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[0], 0); // table1[0] == 0, so table2 not looked up
 
         assert_eq!(v1_array[1], 0);
-        assert_eq!(v2_array[1], 0); // vocab1[1] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[1], 0); // table1[1] == 0, so table2 not looked up
 
         assert_eq!(v1_array[2], 0);
-        assert_eq!(v2_array[2], 0); // vocab1[2] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[2], 0); // table1[2] == 0, so table2 not looked up
 
         assert_eq!(v1_array[3], 5);
-        assert_eq!(v2_array[3], 150); // vocab1[3] == 5 (nonzero), so vocab2[3] == lookup_table2[values2[3]] == lookup_table2[4] == 150
+        assert_eq!(v2_array[3], 150); // table1[3] == 5 (nonzero), so table2[3] == lookup_table2[values2[3]] == lookup_table2[4] == 150
 
         assert_eq!(v1_array[4], 0);
-        assert_eq!(v2_array[4], 0); // vocab1[4] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[4], 0); // table1[4] == 0, so table2 not looked up
 
         assert_eq!(v1_array[5], 0);
-        assert_eq!(v2_array[5], 0); // vocab1[5] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[5], 0); // table1[5] == 0, so table2 not looked up
 
         assert_eq!(v1_array[6], 0);
-        assert_eq!(v2_array[6], 0); // vocab1[6] == 0, so vocab2 not looked up
+        assert_eq!(v2_array[6], 0); // table1[6] == 0, so table2 not looked up
 
         assert_eq!(v1_array[7], 10);
-        assert_eq!(v2_array[7], 80); // vocab1[7] == 10 (nonzero), so vocab2[7] == lookup_table2[values2[7]] == lookup_table2[8] == 80
+        assert_eq!(v2_array[7], 80); // table1[7] == 10 (nonzero), so table2[7] == lookup_table2[values2[7]] == lookup_table2[8] == 80
     }
 
     #[test]
-    fn test_dual_vocab_v2_lookup_func_multiple_chunks() {
+    fn test_dual_table_v2_lookup_func_multiple_chunks() {
         // Test with multiple full chunks
         let lookup_table1 = vec![1u8; 100];
         let lookup_table2 = vec![2u8; 100];
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // Create 50 values (3 full chunks: 16 + 16 + 16 + 2 remainder)
         let values1: Vec<u32> = (0..50).map(|i| (i % 10) as u32).collect();
         let values2: Vec<u32> = (0..50).map(|i| ((i % 10) + 1) as u32).collect();
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
         let mut num_bytes_list = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
             num_bytes_list.push(num_bytes);
         });
 
@@ -1253,14 +1265,14 @@ mod tests {
         // Verify all chunks
         let mut global_idx = 0;
         for chunk_idx in 0..4 {
-            let v1_chunk = vocab1_results[chunk_idx].as_array();
-            let v2_chunk = vocab2_results[chunk_idx].as_array();
+            let v1_chunk = table1_results[chunk_idx].as_array();
+            let v2_chunk = table2_results[chunk_idx].as_array();
             let chunk_len = num_bytes_list[chunk_idx];
 
             for i in 0..chunk_len {
                 let expected_v1 = lookup_table1[values1[global_idx] as usize];
                 assert_eq!(v1_chunk[i], expected_v1);
-                // Since vocab1 is always nonzero (lookup_table1 is all 1s), vocab2 should always be looked up
+                // Since table1 is always nonzero (lookup_table1 is all 1s), table2 should always be looked up
                 assert_eq!(v2_chunk[i], lookup_table2[values2[global_idx] as usize]);
                 global_idx += 1;
             }
@@ -1268,22 +1280,22 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_v2_lookup_func_exact_multiple_of_16() {
+    fn test_dual_table_v2_lookup_func_exact_multiple_of_16() {
         // Test with exactly 32 values (exactly 2 chunks, no remainder)
         let lookup_table1 = vec![0u8, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
         let lookup_table2 = vec![0u8, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         let values1: Vec<u32> = (0..32).map(|i| (i % 5) as u32).collect();
         let values2: Vec<u32> = (0..32).map(|i| ((i % 5) + 1) as u32).collect();
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
         let mut num_bytes_list = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
             num_bytes_list.push(num_bytes);
         });
 
@@ -1295,8 +1307,8 @@ mod tests {
         // Verify both chunks
         let mut global_idx = 0;
         for chunk_idx in 0..2 {
-            let v1_chunk = vocab1_results[chunk_idx].as_array();
-            let v2_chunk = vocab2_results[chunk_idx].as_array();
+            let v1_chunk = table1_results[chunk_idx].as_array();
+            let v2_chunk = table2_results[chunk_idx].as_array();
 
             for i in 0..16 {
                 let expected_v1 = lookup_table1[values1[global_idx] as usize];
@@ -1312,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_with_hash_lookup_basic() {
+    fn test_dual_table_with_hash_lookup_basic() {
         // Create table1 as a regular lookup table
         let lookup_table1: Vec<u8> =
             (0..256).map(|i| if i % 3 == 0 { 0 } else { i as u8 }).collect();
@@ -1326,24 +1338,24 @@ mod tests {
         hash_table2.insert(20, 120);
         hash_table2.insert(100, 200);
 
-        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+        let lookup = SimdDualTableWithHashLookup::new(&lookup_table1, &hash_table2);
 
         // Test values
         let values1: Vec<u32> = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let values2: Vec<u32> = vec![0, 5, 10, 15, 20, 100, 0, 5, 10, 15, 20, 100, 0, 5, 10, 15];
 
-        let mut vocab1_results = Vec::new();
-        let mut vocab2_results = Vec::new();
+        let mut table1_results = Vec::new();
+        let mut table2_results = Vec::new();
 
         lookup.lookup_func(&values1, &values2, &mut |v1, v2, _num_bytes| {
-            vocab1_results.push(v1);
-            vocab2_results.push(v2);
+            table1_results.push(v1);
+            table2_results.push(v2);
         });
 
-        assert_eq!(vocab1_results.len(), 1); // One chunk
+        assert_eq!(table1_results.len(), 1); // One chunk
 
-        let v1_array = vocab1_results[0].as_array();
-        let v2_array = vocab2_results[0].as_array();
+        let v1_array = table1_results[0].as_array();
+        let v2_array = table2_results[0].as_array();
 
         // Check that table2 is only looked up where table1 is nonzero
         for i in 0..16 {
@@ -1360,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_with_hash_lookup_into_vec() {
+    fn test_dual_table_with_hash_lookup_into_vec() {
         // Create table1 as a regular lookup table (all nonzero)
         let lookup_table1: Vec<u8> = (0..256).map(|i| (i + 1) as u8).collect();
 
@@ -1372,7 +1384,7 @@ mod tests {
         hash_table2.insert(3, 40);
         hash_table2.insert(4, 50);
 
-        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+        let lookup = SimdDualTableWithHashLookup::new(&lookup_table1, &hash_table2);
 
         let values1: Vec<u32> = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let values2: Vec<u32> = vec![0, 1, 2, 3, 4, 0, 1, 2];
@@ -1397,26 +1409,26 @@ mod tests {
         let lookup_table2: Vec<u8> = (0..128).map(|i| ((i * 2) % 256) as u8).collect();
 
         // Create kernels
-        let single_vocab = SimdSingleVocabU32U8Lookup::new(&lookup_table1);
-        let cascading_vocab = SimdCascadingVocabU32U8Lookup::new(&lookup_table2);
+        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
+        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
 
-        // Create test values for vocab1 (indices into lookup_table1)
+        // Create test values for table1 (indices into lookup_table1)
         // Some will be 0, some nonzero
         let values1: Vec<u32> = vec![0, 1, 2, 3, 0, 5, 0, 7, 8, 9, 0, 11, 12, 0, 14, 15];
 
-        // Create test values for vocab2 (indices into lookup_table2)
-        // These should be looked up only where vocab1 is nonzero
+        // Create test values for table2 (indices into lookup_table2)
+        // These should be looked up only where table1 is nonzero
         let values2: Vec<u32> = vec![10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 1, 2, 3, 4];
 
-        // Step 1: Call SingleVocab::lookup_compress_into_nonzeroes
+        // Step 1: Call SingleTable::lookup_compress_into_nonzeroes
         let mut nonzero_results: Vec<u8> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
-        single_vocab.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
+        single_table.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
 
         // Verify the nonzero results from step 1
         // Values 0, 4, 6, 10, 13 are zero in lookup_table1
         // Nonzero: 1, 2, 3, 5, 7, 8, 9, 11, 12, 14, 15 (11 values)
-        assert_eq!(nonzero_results.len(), 11, "Expected 11 nonzero results from vocab1");
+        assert_eq!(nonzero_results.len(), 11, "Expected 11 nonzero results from table1");
         assert_eq!(indices.len(), 11, "Expected 11 indices");
 
         // Verify the indices are correct (positions of nonzero values)
@@ -1427,12 +1439,12 @@ mod tests {
         let expected_nonzero: Vec<u8> = vec![1, 2, 3, 5, 7, 8, 9, 11, 12, 14, 15];
         assert_eq!(nonzero_results, expected_nonzero);
 
-        // Step 2: Call CascadingVocab::cascading_lookup
+        // Step 2: Call CascadingTable::cascading_lookup
         let mut out_results: Vec<u8> = Vec::new();
         let mut out_indices: Vec<u32> = Vec::new();
 
         // Mix function: bitwise AND
-        cascading_vocab.cascading_lookup(
+        cascading_table.cascading_lookup(
             &values2,
             &nonzero_results,
             &indices,
@@ -1480,8 +1492,8 @@ mod tests {
         let lookup_table1: Vec<u8> = (0..256).map(|i| i as u8).collect();
         let lookup_table2: Vec<u8> = (0..256).map(|i| i as u8).collect();
 
-        let single_vocab = SimdSingleVocabU32U8Lookup::new(&lookup_table1);
-        let cascading_vocab = SimdCascadingVocabU32U8Lookup::new(&lookup_table2);
+        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
+        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
 
         // Create 5 values (less than 16, so remainder only)
         let values1: Vec<u32> = vec![1, 2, 3, 4, 5];
@@ -1489,7 +1501,7 @@ mod tests {
 
         let mut nonzero_results: Vec<u8> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
-        single_vocab.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
+        single_table.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
 
         // All 5 values are nonzero
         assert_eq!(nonzero_results.len(), 5);
@@ -1499,7 +1511,7 @@ mod tests {
         let mut out_results: Vec<u8> = Vec::new();
         let mut out_indices: Vec<u32> = Vec::new();
 
-        cascading_vocab.cascading_lookup(
+        cascading_table.cascading_lookup(
             &values2,
             &nonzero_results,
             &indices,
@@ -1526,8 +1538,8 @@ mod tests {
         let lookup_table1: Vec<u8> = (0..256).map(|i| ((i + 1) % 256) as u8).collect(); // All nonzero except 255
         let lookup_table2: Vec<u8> = (0..256).map(|i| i as u8).collect();
 
-        let single_vocab = SimdSingleVocabU32U8Lookup::new(&lookup_table1);
-        let cascading_vocab = SimdCascadingVocabU32U8Lookup::new(&lookup_table2);
+        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
+        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
 
         // Create 35 values (2 full chunks of 16 + 3 remainder)
         let values1: Vec<u32> = (0..35).collect();
@@ -1535,7 +1547,7 @@ mod tests {
 
         let mut nonzero_results: Vec<u8> = Vec::new();
         let mut indices: Vec<u32> = Vec::new();
-        single_vocab.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
+        single_table.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
 
         // All 35 values should be nonzero (lookup_table1[i] = (i+1) % 256)
         assert_eq!(nonzero_results.len(), 35);
@@ -1544,7 +1556,7 @@ mod tests {
         let mut out_results: Vec<u8> = Vec::new();
         let mut out_indices: Vec<u32> = Vec::new();
 
-        cascading_vocab.cascading_lookup(
+        cascading_table.cascading_lookup(
             &values2,
             &nonzero_results,
             &indices,

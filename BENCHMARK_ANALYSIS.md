@@ -4,19 +4,19 @@
 
 Two major findings from comprehensive benchmarking:
 
-1. **Bit-packing provides 27% speedup** by reducing dual vocab from 30MB → 7MB
+1. **Bit-packing provides 27% speedup** by reducing dual table from 30MB → 7MB
 2. **Vec::push() overhead is massive** - costs 35% of total performance!
 
 ---
 
 ## Results Summary
 
-### 1. Bit-Packing Effectiveness (dual_vocab_comparison)
+### 1. Bit-Packing Effectiveness (dual_table_comparison)
 
 | Method | Memory | Throughput | vs Baseline |
 |--------|--------|-----------|-------------|
-| Regular u8 dual vocab | 30 MB | 263 Melem/s | Baseline |
-| 2-bit packed dual vocab | 7 MB | 334 Melem/s | **+27% faster** |
+| Regular u8 dual table | 30 MB | 263 Melem/s | Baseline |
+| 2-bit packed dual table | 7 MB | 334 Melem/s | **+27% faster** |
 
 **Key Insight**: Moving from 30MB (doesn't fit in L3) to 7MB (fits in L3) provides significant speedup despite bit extraction overhead.
 
@@ -33,7 +33,7 @@ Two major findings from comprehensive benchmarking:
 
 ### 3. Cache Size Impact (from diagnostic tests)
 
-| Table Size | Single Vocab | Notes |
+| Table Size | Single Table | Notes |
 |------------|-------------|-------|
 | 3 MB | 1439 Melem/s | Fits in L3 |
 | 15 MB | 462 Melem/s | Doesn't fit in L3 |
@@ -93,10 +93,10 @@ From diagnostic tests:
 
 ## Recommendations
 
-### 1. Use Bit-Packing for Large Dual Vocabs ✅
+### 1. Use Bit-Packing for Large Dual Tables ✅
 
 **When to use:**
-- Dual vocabulary lookups
+- Dual table lookups
 - Tables > 10MB each
 - Value range fits in 2-3 bits
 - Cache thrashing is suspected
@@ -147,7 +147,7 @@ write_idx += 16;
 
 ### 3. Choose Kernel by Table Size
 
-| Table Size (per vocab) | Recommended Kernel | Why |
+| Table Size (per table) | Recommended Kernel | Why |
 |------------------------|-------------------|------|
 | < 5 MB | Naive dual lookup | Simplest, no V2 overhead |
 | 5-10 MB | Test both | Depends on access pattern |
@@ -195,10 +195,10 @@ With sequential access pattern + bit-packing + no push:
 
 ```bash
 # Diagnostic tests
-cargo bench --bench dual_vocab_diagnostic
+cargo bench --bench dual_table_diagnostic
 
 # Bit-packing comparison
-cargo bench --bench bitpacked_bench -- dual_vocab_comparison
+cargo bench --bench bitpacked_bench -- dual_table_comparison
 
 # Output overhead analysis
 cargo bench --bench output_overhead_test
@@ -215,7 +215,7 @@ cargo bench --bench lookup_kernel_bench
    - Replace Vec::push with bulk writes or accept all output
    - Expected: +35% speedup
 
-2. **Deploy bit-packing** for large dual vocabs
+2. **Deploy bit-packing** for large dual tables
    - Expected: +27% additional speedup
    - Combined: ~70% total improvement
 

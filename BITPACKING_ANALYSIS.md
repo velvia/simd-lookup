@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-Your benchmarks show a **3-4x slowdown** for dual vocabulary lookups compared to single vocabulary, even though the second lookup only happens 20% of the time:
+Your benchmarks show a **3-4x slowdown** for dual table lookups compared to single table, even though the second lookup only happens 20% of the time:
 
 - **Expected performance**: Single = X, Dual ≈ 1.2X (1.0 for first lookup + 0.2 for conditional second)
 - **Actual performance**: Single = X, Dual = 3-4X
@@ -62,14 +62,14 @@ let value = (word >> (value_index * BITS)) & MASK;
 ### Example Usage
 
 ```rust
-use simd_lookup::bitpacked_lookup::{BitPackedDualVocab, TwoBit, ThreeBit};
+use simd_lookup::bitpacked_lookup::{BitPackedDualTable, TwoBit, ThreeBit};
 
 // Create from existing u8 tables (values will be truncated to fit bit width)
-let dual_2bit = BitPackedDualVocab::<TwoBit>::from_u8_tables(&table1, &table2);
+let dual_2bit = BitPackedDualTable::<TwoBit>::from_u8_tables(&table1, &table2);
 
 // Or create from sparse entries
 let entries = vec![(0, 1), (1000, 2), (5000, 3)];
-let dual_2bit = BitPackedDualVocab::<TwoBit>::from_entries(&entries);
+let dual_2bit = BitPackedDualTable::<TwoBit>::from_entries(&entries);
 
 // Conditional lookup (only looks up table2 if table1 != 0)
 let mut results = vec![(0u8, 0u8); keys.len()];
@@ -84,11 +84,11 @@ dual_2bit.lookup_batch_conditional(&keys1, &keys2, &mut results);
 # Full benchmark suite
 cargo bench --bench bitpacked_bench
 
-# Just single vocab comparison
-cargo bench --bench bitpacked_bench -- single_vocab_comparison
+# Just single table comparison
+cargo bench --bench bitpacked_bench -- single_table_comparison
 
-# Just dual vocab comparison (the smoking gun test)
-cargo bench --bench bitpacked_bench -- dual_vocab_comparison
+# Just dual table comparison (the smoking gun test)
+cargo bench --bench bitpacked_bench -- dual_table_comparison
 
 # Table size scaling (find cache threshold)
 cargo bench --bench bitpacked_bench -- table_size_scaling
@@ -96,8 +96,8 @@ cargo bench --bench bitpacked_bench -- table_size_scaling
 
 ### What to Look For
 
-1. **Single vocab**: Bit-packed might be slightly slower (cache isn't the bottleneck)
-2. **Dual vocab**: Bit-packed should be **significantly faster** (2-3x) if cache thrashing is the issue
+1. **Single table**: Bit-packed might be slightly slower (cache isn't the bottleneck)
+2. **Dual table**: Bit-packed should be **significantly faster** (2-3x) if cache thrashing is the issue
 3. **Table size scaling**: Performance should degrade sharply when tables exceed L3 cache size
 
 ### Expected Results
@@ -105,11 +105,11 @@ cargo bench --bench bitpacked_bench -- table_size_scaling
 If cache thrashing is indeed the issue (which your 3-4x slowdown strongly suggests):
 
 ```
-single_vocab_comparison/regular_u8       time: ~XXX ms
-single_vocab_comparison/bitpacked_2bit   time: ~XXX ms (similar or slightly slower)
+single_table_comparison/regular_u8       time: ~XXX ms
+single_table_comparison/bitpacked_2bit   time: ~XXX ms (similar or slightly slower)
 
-dual_vocab_comparison/regular_u8_v2      time: ~XXX ms  (3-4x slower than single)
-dual_vocab_comparison/bitpacked_2bit     time: ~XXX ms  (2-3x FASTER than regular dual!)
+dual_table_comparison/regular_u8_v2      time: ~XXX ms  (3-4x slower than single)
+dual_table_comparison/bitpacked_2bit     time: ~XXX ms  (2-3x FASTER than regular dual!)
 ```
 
 ## Next Steps
@@ -172,9 +172,9 @@ As per your research:
 
 ## Conclusion
 
-Based on your performance numbers (3-4x dual vocab slowdown despite only 20% second lookups), **cache thrashing is almost certainly the bottleneck**. Bit-packing should provide a significant speedup by bringing both tables into L3 cache.
+Based on your performance numbers (3-4x dual table slowdown despite only 20% second lookups), **cache thrashing is almost certainly the bottleneck**. Bit-packing should provide a significant speedup by bringing both tables into L3 cache.
 
 The 5x extraction overhead is worth paying if it eliminates constant RAM access, which is 10x slower than L3.
 
-**Expected outcome**: 2-3x speedup for dual vocabulary lookups.
+**Expected outcome**: 2-3x speedup for dual table lookups.
 

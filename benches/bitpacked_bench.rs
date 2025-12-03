@@ -1,7 +1,7 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use rand::prelude::*;
-use simd_lookup::bitpacked_lookup::{BitPackedDualVocab, BitPackedSingleVocab, ThreeBit, TwoBit};
-use simd_lookup::lookup_kernel::{SimdDualVocabU32U8LookupV2, SimdSingleVocabU32U8Lookup};
+use simd_lookup::bitpacked_lookup::{BitPackedDualTable, BitPackedSingleTable, ThreeBit, TwoBit};
+use simd_lookup::lookup_kernel::{SimdDualTableU32U8LookupV2, SimdSingleTableU32U8Lookup};
 
 /// Create sparse entries for kernel benchmarks
 fn create_sparse_entries(size: usize, density_percent: f32, max_value: u8) -> Vec<(u32, u8)> {
@@ -44,13 +44,13 @@ fn create_test_values(num_values: usize, max_index: usize) -> Vec<u32> {
     values
 }
 
-/// Benchmark single vocab: regular u8 vs 2-bit packed
-fn bench_single_vocab_comparison(c: &mut Criterion) {
+/// Benchmark single table: regular u8 vs 2-bit packed
+fn bench_single_table_comparison(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0;
     let num_values = 1_000_000;
 
-    let mut group = c.benchmark_group("single_vocab_comparison");
+    let mut group = c.benchmark_group("single_table_comparison");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Create entries with values 0-3 (2-bit range)
@@ -59,10 +59,10 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
 
     // Regular u8 table
     let lookup_table_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup_u8 = SimdSingleVocabU32U8Lookup::new(&lookup_table_u8);
+    let lookup_u8 = SimdSingleTableU32U8Lookup::new(&lookup_table_u8);
 
     println!(
-        "Single vocab - Regular u8 table: {} MB",
+        "Single table - Regular u8 table: {} MB",
         lookup_table_u8.len() / 1_000_000
     );
 
@@ -76,10 +76,10 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
     });
 
     // 2-bit packed
-    let lookup_2bit = BitPackedSingleVocab::<TwoBit>::from_entries(&entries);
+    let lookup_2bit = BitPackedSingleTable::<TwoBit>::from_entries(&entries);
 
     println!(
-        "Single vocab - 2-bit packed: {} MB",
+        "Single table - 2-bit packed: {} MB",
         lookup_2bit.memory_bytes() / 1_000_000
     );
     println!(
@@ -98,14 +98,14 @@ fn bench_single_vocab_comparison(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark dual vocab: regular u8 vs 2-bit packed
+/// Benchmark dual table: regular u8 vs 2-bit packed
 /// This is where we expect bit-packing to REALLY shine due to cache thrashing
-fn bench_dual_vocab_comparison(c: &mut Criterion) {
+fn bench_dual_table_comparison(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0;
     let num_values = 1_000_000;
 
-    let mut group = c.benchmark_group("dual_vocab_comparison");
+    let mut group = c.benchmark_group("dual_table_comparison");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Create entries with values 0-3 (2-bit range)
@@ -117,10 +117,10 @@ fn bench_dual_vocab_comparison(c: &mut Criterion) {
     // Regular u8 tables with V2 (conditional lookup)
     let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
     let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-    let mut lookup_u8_v2 = SimdDualVocabU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
+    let mut lookup_u8_v2 = SimdDualTableU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
 
     let total_mb_u8 = (lookup_table1_u8.len() + lookup_table2_u8.len()) / 1_000_000;
-    println!("\nDual vocab - Regular u8 tables: {} MB total", total_mb_u8);
+    println!("\nDual table - Regular u8 tables: {} MB total", total_mb_u8);
 
     group.bench_function("regular_u8_v2", |b| {
         b.iter(|| {
@@ -151,10 +151,10 @@ fn bench_dual_vocab_comparison(c: &mut Criterion) {
 
     // 2-bit packed
     let lookup_2bit_dual =
-        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+        BitPackedDualTable::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
     let total_mb_2bit = lookup_2bit_dual.memory_bytes() / 1_000_000;
-    println!("Dual vocab - 2-bit packed: {} MB total", total_mb_2bit);
+    println!("Dual table - 2-bit packed: {} MB total", total_mb_2bit);
     println!(
         "Compression ratio: {:.2}x",
         (lookup_table1_u8.len() + lookup_table2_u8.len()) as f64
@@ -194,7 +194,7 @@ fn bench_table_size_scaling(c: &mut Criterion) {
     let density = 20.0;
     let num_values = 1_000_000;
 
-    let mut group = c.benchmark_group("dual_vocab_table_size_scaling");
+    let mut group = c.benchmark_group("dual_table_size_scaling");
 
     // Test different table sizes from L3-fittable to beyond
     // M1/M2 chips typically have 24-32MB L3 cache
@@ -210,7 +210,7 @@ fn bench_table_size_scaling(c: &mut Criterion) {
         let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
         let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
         let mut lookup_u8_v2 =
-            SimdDualVocabU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
+            SimdDualTableU32U8LookupV2::new(&lookup_table1_u8, &lookup_table2_u8);
 
         let total_mb = (lookup_table1_u8.len() + lookup_table2_u8.len()) / 1_000_000;
 
@@ -245,7 +245,7 @@ fn bench_table_size_scaling(c: &mut Criterion) {
 
         // 2-bit packed
         let lookup_2bit_dual =
-            BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+            BitPackedDualTable::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
         let packed_mb = lookup_2bit_dual.memory_bytes() / 1_000_000;
 
         group.bench_with_input(
@@ -285,7 +285,7 @@ fn bench_bit_width_comparison(c: &mut Criterion) {
     let density = 20.0;
     let num_values = 1_000_000;
 
-    let mut group = c.benchmark_group("dual_vocab_bit_width");
+    let mut group = c.benchmark_group("dual_table_bit_width");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // 2-bit (values 0-3)
@@ -297,10 +297,10 @@ fn bench_bit_width_comparison(c: &mut Criterion) {
     let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1_2bit);
     let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2_2bit);
     let lookup_2bit =
-        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+        BitPackedDualTable::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
     println!(
-        "\n2-bit dual vocab: {} MB",
+        "\n2-bit dual table: {} MB",
         lookup_2bit.memory_bytes() / 1_000_000
     );
 
@@ -333,13 +333,13 @@ fn bench_bit_width_comparison(c: &mut Criterion) {
 
     let lookup_table1_u8_3bit = simd_lookup::lookup::create_scalar_lookup_table(&entries1_3bit);
     let lookup_table2_u8_3bit = simd_lookup::lookup::create_scalar_lookup_table(&entries2_3bit);
-    let lookup_3bit = BitPackedDualVocab::<ThreeBit>::from_u8_tables(
+    let lookup_3bit = BitPackedDualTable::<ThreeBit>::from_u8_tables(
         &lookup_table1_u8_3bit,
         &lookup_table2_u8_3bit,
     );
 
     println!(
-        "3-bit dual vocab: {} MB",
+        "3-bit dual table: {} MB",
         lookup_3bit.memory_bytes() / 1_000_000
     );
 
@@ -383,13 +383,13 @@ fn bench_conditional_vs_unconditional(c: &mut Criterion) {
     let lookup_table1_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
     let lookup_table2_u8 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
     let lookup_2bit =
-        BitPackedDualVocab::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
+        BitPackedDualTable::<TwoBit>::from_u8_tables(&lookup_table1_u8, &lookup_table2_u8);
 
     let mut group = c.benchmark_group("conditional_vs_unconditional");
     group.throughput(Throughput::Elements(num_values as u64));
 
     println!(
-        "\nBit-packed 2-bit dual vocab: {} MB",
+        "\nBit-packed 2-bit dual table: {} MB",
         lookup_2bit.memory_bytes() / 1_000_000
     );
 
@@ -448,8 +448,8 @@ fn bench_conditional_vs_unconditional(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_single_vocab_comparison,
-    bench_dual_vocab_comparison,
+    bench_single_table_comparison,
+    bench_dual_table_comparison,
     bench_table_size_scaling,
     bench_bit_width_comparison,
     bench_conditional_vs_unconditional

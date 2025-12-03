@@ -4,10 +4,10 @@ use rustc_hash::FxHashMap;
 use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 // use simd_lookup::entropy_map_lookup::EntropyMapLookup;
 use simd_lookup::lookup_kernel::{
-    SimdCascadingVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2,
-    SimdDualVocabWithHashLookup, SimdSingleVocabU32U8Lookup,
+    SimdCascadingTableU32U8Lookup, SimdDualTableU32U8Lookup, SimdDualTableU32U8LookupV2,
+    SimdDualTableWithHashLookup, SimdSingleTableU32U8Lookup,
 };
-use simd_lookup::{PipelinedSingleVocabU32U8Lookup, compress_store_u8x16, compress_store_u32x16};
+use simd_lookup::{PipelinedSingleTableU32U8Lookup, compress_store_u8x16, compress_store_u32x16};
 use wide::{u8x16, u32x16};
 
 /// Create sparse entries for kernel benchmarks (same as lookup_bench.rs)
@@ -17,7 +17,7 @@ fn create_sparse_entries_for_kernel(size: usize, density_percent: f32) -> Vec<(u
     let mut entries = Vec::with_capacity(num_entries);
 
     // Create sparse entries distributed across the range [0, size-1]
-    // Ensure we cover the full range so vocab size is exactly 'size'
+    // Ensure we cover the full range so table size is exactly 'size'
     let step = if num_entries > 1 {
         (size - 1) / (num_entries - 1).max(1)
     } else {
@@ -28,7 +28,7 @@ fn create_sparse_entries_for_kernel(size: usize, density_percent: f32) -> Vec<(u
         let key = if num_entries == 1 {
             0
         } else if i == num_entries - 1 {
-            // Ensure last entry is at size-1 to make vocab size exactly 'size'
+            // Ensure last entry is at size-1 to make table size exactly 'size'
             (size - 1) as u32
         } else {
             (i * step) as u32
@@ -54,9 +54,9 @@ fn create_test_values(num_values: usize, max_index: usize) -> Vec<u32> {
     values
 }
 
-/// Benchmark SimdSingleVocabU32U8Lookup with chunks of 5000
+/// Benchmark SimdSingleTableU32U8Lookup with chunks of 5000
 /// Compares simple (direct write) vs complex (filter zeros and track indices) lookup functions
-fn bench_single_vocab_lookup(c: &mut Criterion) {
+fn bench_single_table_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -68,13 +68,13 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     // Use the same table creation method as batch_lookup benchmark
     let entries = create_sparse_entries_for_kernel(table_size, density);
     let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup = SimdSingleVocabU32U8Lookup::new(&lookup_table);
+    let lookup = SimdSingleTableU32U8Lookup::new(&lookup_table);
 
     // Create 1 million test values (divisible by chunk_size)
     let num_values = 1_000_000;
     let test_values = create_test_values(num_values, table_size);
 
-    let mut group = c.benchmark_group("single_vocab_lookup");
+    let mut group = c.benchmark_group("single_table_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Simple version: direct write to Vec
@@ -114,10 +114,10 @@ fn bench_single_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark PipelinedSingleVocabU32U8Lookup with chunks of 5000
+/// Benchmark PipelinedSingleTableU32U8Lookup with chunks of 5000
 /// Compares simple (direct write) vs complex (filter zeros and track indices) lookup functions
-/// Uses the same parameters as single_vocab_lookup for direct comparison
-fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
+/// Uses the same parameters as single_table_lookup for direct comparison
+fn bench_pipelined_single_table_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -129,13 +129,13 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
     // Use the same table creation method as batch_lookup benchmark
     let entries = create_sparse_entries_for_kernel(table_size, density);
     let lookup_table = simd_lookup::lookup::create_scalar_lookup_table(&entries);
-    let lookup = PipelinedSingleVocabU32U8Lookup::new(&lookup_table);
+    let lookup = PipelinedSingleTableU32U8Lookup::new(&lookup_table);
 
     // Create 1 million test values (divisible by chunk_size)
     let num_values = 1_000_000;
     let test_values = create_test_values(num_values, table_size);
 
-    let mut group = c.benchmark_group("pipelined_single_vocab_lookup");
+    let mut group = c.benchmark_group("pipelined_single_table_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Simple version: direct write to Vec
@@ -196,9 +196,9 @@ fn bench_pipelined_single_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdDualVocabU32U8Lookup with chunks of 5000
+/// Benchmark SimdDualTableU32U8Lookup with chunks of 5000
 /// Takes bitwise AND of the two lookup results
-fn bench_dual_vocab_lookup(c: &mut Criterion) {
+fn bench_dual_table_lookup(c: &mut Criterion) {
     let table_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -212,14 +212,14 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
     let entries2 = create_sparse_entries_for_kernel(table_size, density);
     let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
     let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-    let lookup = SimdDualVocabU32U8Lookup::new(&lookup_table1, &lookup_table2);
+    let lookup = SimdDualTableU32U8Lookup::new(&lookup_table1, &lookup_table2);
 
     // Create 1 million test values (two sets, divisible by chunk_size)
     let num_values = 1_000_000;
     let test_values1 = create_test_values(num_values, table_size);
     let test_values2 = create_test_values(num_values, table_size);
 
-    let mut group = c.benchmark_group("dual_vocab_lookup");
+    let mut group = c.benchmark_group("dual_table_lookup");
     group.throughput(Throughput::Elements(num_values as u64));
 
     group.bench_function("chunks_of_5000_bitwise_and", |b| {
@@ -246,10 +246,10 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
 }
 
 // =================================================================================================
-// REMOVED: bench_joined_dual_vocab_lookup
+// REMOVED: bench_joined_dual_table_lookup
 // =================================================================================================
 //
-// This benchmark tested SimdJoinedDualVocabU32U8Lookup, which concatenated two lookup tables into
+// This benchmark tested SimdJoinedDualTableU32U8Lookup, which concatenated two lookup tables into
 // a single allocation to test whether TLB locality would improve performance.
 //
 // **Design tested:**
@@ -259,7 +259,7 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
 // **Benchmark results:**
 // Tested with 15M entries per table, 20% density, processing 1M values in chunks of 5000.
 // On both Intel (AVX-512) and ARM (Apple Silicon) platforms, the joined table design showed
-// NO appreciable performance wins compared to `SimdDualVocabU32U8Lookup` with separate tables.
+// NO appreciable performance wins compared to `SimdDualTableU32U8Lookup` with separate tables.
 //
 // The hypothesis that TLB swaps between two large tables would be a performance bottleneck
 // did not hold in practice. Modern CPU TLBs handle multiple large allocations efficiently.
@@ -267,10 +267,10 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
 // The benchmark and kernel were removed since the simpler non-joined design is equally fast.
 // =================================================================================================
 
-/// Benchmark SimdDualVocabU32U8LookupV2 with varying second lookup table sizes
+/// Benchmark SimdDualTableU32U8LookupV2 with varying second lookup table sizes
 /// Takes bitwise AND of the two lookup results and writes nonzero u8's into a Vec
 /// This benchmark tests the effect of lookup table 2 size on throughput
-fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
+fn bench_dual_table_lookup_v2(c: &mut Criterion) {
     let table1_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -287,7 +287,7 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
     let num_values = 1_000_000;
     let test_values1 = create_test_values(num_values, table1_size);
 
-    let mut group = c.benchmark_group("dual_vocab_v2_table2_size");
+    let mut group = c.benchmark_group("dual_table_v2_table2_size");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Vary second lookup table size: 100k, 500k, 4M, 15M
@@ -303,7 +303,7 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
         println!("Creating lookup table 2: {} entries", table2_size);
         let entries2 = create_sparse_entries_for_kernel(table2_size, density);
         let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // Create test values for table 2 (indices within table2_size)
         let test_values2 = create_test_values(num_values, table2_size);
@@ -359,9 +359,9 @@ fn bench_dual_vocab_lookup_v2(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdDualVocabU32U8LookupV2 with simple direct output using BulkVecExtender
+/// Benchmark SimdDualTableU32U8LookupV2 with simple direct output using BulkVecExtender
 /// This version writes all u8x16 results directly without filtering, to measure raw throughput
-fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
+fn bench_dual_table_lookup_v2_simple(c: &mut Criterion) {
     let table1_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -378,7 +378,7 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
     let num_values = 1_000_000;
     let test_values1 = create_test_values(num_values, table1_size);
 
-    let mut group = c.benchmark_group("dual_vocab_v2_simple_output");
+    let mut group = c.benchmark_group("dual_table_v2_simple_output");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Vary second lookup table size: 100k, 500k, 4M, 15M
@@ -394,7 +394,7 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
         println!("Creating lookup table 2 (simple): {} entries", table2_size);
         let entries2 = create_sparse_entries_for_kernel(table2_size, density);
         let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-        let mut lookup = SimdDualVocabU32U8LookupV2::new(&lookup_table1, &lookup_table2);
+        let mut lookup = SimdDualTableU32U8LookupV2::new(&lookup_table1, &lookup_table2);
 
         // Create test values for table 2 (indices within table2_size)
         let test_values2 = create_test_values(num_values, table2_size);
@@ -432,11 +432,11 @@ fn bench_dual_vocab_lookup_v2_simple(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark dual vocab lookup with FxHashMap for table2
+/// Benchmark dual table lookup with FxHashMap for table2
 /// Tests varying hash table sizes: 1k, 3k, 10k, 30k, 100k, 300k entries
 /// Table1 is fixed at 15M entries with 20% density
-fn bench_dual_vocab_with_hash(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dual_vocab_with_hash");
+fn bench_dual_table_with_hash(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dual_table_with_hash");
 
     // Fixed parameters for table1
     let table1_size = 15_000_000;
@@ -445,7 +445,7 @@ fn bench_dual_vocab_with_hash(c: &mut Criterion) {
     let chunk_size = 5000;
     let max_word_id = 15_000_000usize; // Max word ID for table2 keys
 
-    // Create table1 (same as other dual vocab benchmarks)
+    // Create table1 (same as other dual table benchmarks)
     println!(
         "Creating lookup table 1: {} entries, {}% density",
         table1_size, table1_density
@@ -483,7 +483,7 @@ fn bench_dual_vocab_with_hash(c: &mut Criterion) {
         // Create test values for table2 (random keys within max_word_id range)
         let test_values2 = create_test_values(num_values, max_word_id);
 
-        let lookup = SimdDualVocabWithHashLookup::new(&lookup_table1, &hash_table2);
+        let lookup = SimdDualTableWithHashLookup::new(&lookup_table1, &hash_table2);
 
         let size_label = match hash_size {
             1_000 => "1k",
@@ -546,12 +546,12 @@ fn bench_dual_vocab_with_hash(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdCascadingVocabU32U8Lookup with varying second lookup table sizes
-/// Uses the same parameters as DualVocabV2 for comparison
+/// Benchmark SimdCascadingTableU32U8Lookup with varying second lookup table sizes
+/// Uses the same parameters as DualTableV2 for comparison
 /// This benchmark uses the cascading approach:
-/// 1. First lookup using SimdSingleVocabU32U8Lookup::lookup_compress_into_nonzeroes
-/// 2. Then cascading lookup using SimdCascadingVocabU32U8Lookup::cascading_lookup
-fn bench_cascading_vocab_lookup(c: &mut Criterion) {
+/// 1. First lookup using SimdSingleTableU32U8Lookup::lookup_compress_into_nonzeroes
+/// 2. Then cascading lookup using SimdCascadingTableU32U8Lookup::cascading_lookup
+fn bench_cascading_table_lookup(c: &mut Criterion) {
     let table1_size = 15_000_000;
     let density = 20.0; // 20% density
     let chunk_size = 5000;
@@ -568,7 +568,7 @@ fn bench_cascading_vocab_lookup(c: &mut Criterion) {
     let num_values = 1_000_000;
     let test_values1 = create_test_values(num_values, table1_size);
 
-    let mut group = c.benchmark_group("cascading_vocab_table2_size");
+    let mut group = c.benchmark_group("cascading_table_table2_size");
     group.throughput(Throughput::Elements(num_values as u64));
 
     // Vary second lookup table size: 100k, 500k, 4M, 15M
@@ -586,8 +586,8 @@ fn bench_cascading_vocab_lookup(c: &mut Criterion) {
         let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
 
         // Create the kernels
-        let single_vocab = SimdSingleVocabU32U8Lookup::new(&lookup_table1);
-        let cascading_vocab = SimdCascadingVocabU32U8Lookup::new(&lookup_table2);
+        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
+        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
 
         // Create test values for table 2 (indices within table2_size)
         let test_values2 = create_test_values(num_values, table2_size);
@@ -610,9 +610,9 @@ fn bench_cascading_vocab_lookup(c: &mut Criterion) {
                     nonzero_results.clear();
                     indices.clear();
 
-                    // Stage 1: Single vocab lookup with compression into nonzeroes
+                    // Stage 1: Single table lookup with compression into nonzeroes
                     let base_index = (chunk_idx * chunk_size) as u32;
-                    single_vocab.lookup_compress_into_nonzeroes(
+                    single_table.lookup_compress_into_nonzeroes(
                         black_box(chunk1),
                         &mut nonzero_results,
                         &mut indices,
@@ -621,7 +621,7 @@ fn bench_cascading_vocab_lookup(c: &mut Criterion) {
 
                     // Stage 2: Cascading lookup
                     // Pass the entire test_values2 array so absolute indices work correctly
-                    cascading_vocab.cascading_lookup(
+                    cascading_table.cascading_lookup(
                         black_box(&test_values2),
                         &nonzero_results,
                         &indices,
@@ -641,13 +641,13 @@ fn bench_cascading_vocab_lookup(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_single_vocab_lookup,
-    bench_pipelined_single_vocab_lookup,
-    bench_dual_vocab_lookup,
-    // bench_joined_dual_vocab_lookup removed - see comments above for benchmark results
-    bench_dual_vocab_lookup_v2,
-    bench_dual_vocab_lookup_v2_simple,
-    bench_dual_vocab_with_hash,
-    bench_cascading_vocab_lookup
+    bench_single_table_lookup,
+    bench_pipelined_single_table_lookup,
+    bench_dual_table_lookup,
+    // bench_joined_dual_table_lookup removed - see comments above for benchmark results
+    bench_dual_table_lookup_v2,
+    bench_dual_table_lookup_v2_simple,
+    bench_dual_table_with_hash,
+    bench_cascading_table_lookup
 );
 criterion_main!(benches);

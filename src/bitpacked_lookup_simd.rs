@@ -12,17 +12,17 @@
 use crate::bitpacked_lookup::{BitPackStrategy, TwoBit, ThreeBit};
 use std::marker::PhantomData;
 
-/// SIMD-accelerated bit-packed dual vocabulary lookup
+/// SIMD-accelerated bit-packed dual table lookup
 /// Uses masked gather to eliminate conditional lookup branches
 #[derive(Debug, Clone)]
-pub struct BitPackedDualVocabSIMD<S: BitPackStrategy> {
+pub struct BitPackedDualTableSIMD<S: BitPackStrategy> {
     packed_data1: Vec<u64>,
     packed_data2: Vec<u64>,
     max_key: u32,
     _strategy: PhantomData<S>,
 }
 
-impl<S: BitPackStrategy> BitPackedDualVocabSIMD<S> {
+impl<S: BitPackStrategy> BitPackedDualTableSIMD<S> {
     /// Create from two u8 tables
     pub fn from_u8_tables(table1: &[u8], table2: &[u8]) -> Self {
         assert_eq!(table1.len(), table2.len(), "Tables must be same size");
@@ -206,7 +206,7 @@ mod tests {
         let table1 = vec![0u8, 1, 2, 0, 3, 0];
         let table2 = vec![10u8, 11, 12, 13, 14, 15];
 
-        let lookup = BitPackedDualVocabSIMD::<TwoBit>::from_u8_tables(&table1, &table2);
+        let lookup = BitPackedDualTableSIMD::<TwoBit>::from_u8_tables(&table1, &table2);
 
         let keys1 = vec![0, 1, 2, 3, 4, 5];
         let keys2 = vec![0, 1, 2, 3, 4, 5];

@@ -9,7 +9,7 @@ fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
     let mut entries = Vec::with_capacity(num_entries);
 
     // Create sparse entries distributed across the range [0, size-1]
-    // Ensure we cover the full range so vocab size is exactly 'size'
+    // Ensure we cover the full range so table size is exactly 'size'
     let step = if num_entries > 1 {
         (size - 1) / (num_entries - 1).max(1)
     } else {
@@ -20,7 +20,7 @@ fn create_sparse_entries(size: usize, density_percent: f32) -> Vec<(u32, u8)> {
         let key = if num_entries == 1 {
             0
         } else if i == num_entries - 1 {
-            // Ensure last entry is at size-1 to make vocab size exactly 'size'
+            // Ensure last entry is at size-1 to make table size exactly 'size'
             (size - 1) as u32
         } else {
             (i * step) as u32

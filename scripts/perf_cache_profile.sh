@@ -5,7 +5,7 @@
 set -e
 
 BENCHMARK_NAME="${1:-lookup_kernel_bench}"
-BENCHMARK_FUNC="${2:-single_vocab_lookup}"
+BENCHMARK_FUNC="${2:-single_table_lookup}"
 PROFILE_TIME="${3:-10}"
 
 echo "=== Cache Profiling with Linux Perf ==="

@@ -1,9 +1,9 @@
-//! Bit-packed lookup tables for memory-efficient vocabulary lookups
+//! Bit-packed lookup tables for memory-efficient table lookups
 //!
 //! Uses 64-bit word packing to avoid cross-boundary issues while dramatically
 //! reducing memory footprint for small value spaces (2-3 bits).
 //!
-//! Key insight: For large dual-vocabulary lookups, the memory savings (4x for 2-bit)
+//! Key insight: For large dual-table lookups, the memory savings (4x for 2-bit)
 //! can move tables from RAM-bound to L3-bound, providing massive speedup despite
 //! the bit extraction overhead.
 //!
@@ -172,13 +172,13 @@ impl<S: BitPackStrategy> BitPackedLookup<S> {
     }
 }
 
-/// Single vocabulary bit-packed lookup kernel
+/// Single table bit-packed lookup kernel
 #[derive(Debug, Clone)]
-pub struct BitPackedSingleVocab<S: BitPackStrategy> {
+pub struct BitPackedSingleTable<S: BitPackStrategy> {
     lookup: BitPackedLookup<S>,
 }
 
-impl<S: BitPackStrategy> BitPackedSingleVocab<S> {
+impl<S: BitPackStrategy> BitPackedSingleTable<S> {
     #[inline]
     pub fn new(lookup: BitPackedLookup<S>) -> Self {
         Self { lookup }
@@ -207,15 +207,15 @@ impl<S: BitPackStrategy> BitPackedSingleVocab<S> {
     }
 }
 
-/// Dual vocabulary bit-packed lookup kernel
+/// Dual table bit-packed lookup kernel
 /// This is where bit-packing really shines: two 15MB tables → two 3.75MB tables
 #[derive(Debug, Clone)]
-pub struct BitPackedDualVocab<S: BitPackStrategy> {
+pub struct BitPackedDualTable<S: BitPackStrategy> {
     lookup1: BitPackedLookup<S>,
     lookup2: BitPackedLookup<S>,
 }
 
-impl<S: BitPackStrategy> BitPackedDualVocab<S> {
+impl<S: BitPackStrategy> BitPackedDualTable<S> {
     #[inline]
     pub fn new(lookup1: BitPackedLookup<S>, lookup2: BitPackedLookup<S>) -> Self {
         Self { lookup1, lookup2 }
@@ -388,11 +388,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dual_vocab_conditional() {
+    fn test_dual_table_conditional() {
         let table1 = vec![0u8, 1, 2, 0, 3, 0];
         let table2 = vec![0u8, 10, 20, 30, 40, 50];
 
-        let dual = BitPackedDualVocab::<TwoBit>::from_u8_tables(&table1, &table2);
+        let dual = BitPackedDualTable::<TwoBit>::from_u8_tables(&table1, &table2);
 
         let keys1 = vec![0, 1, 2, 3, 4];
         let keys2 = vec![0, 1, 2, 3, 4];

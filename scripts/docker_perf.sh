@@ -10,7 +10,7 @@
 
 set -e
 
-BENCHMARK_FUNC="${1:-single_vocab_lookup}"
+BENCHMARK_FUNC="${1:-single_table_lookup}"
 PROFILE_TIME="${2:-10}"
 
 IMAGE_NAME="simd-lookup-perf"
@@ -20,7 +20,7 @@ CONTAINER_NAME="simd-lookup-perf-$$"
 if [ "$1" = "interactive" ]; then
     echo "=== Entering Docker Container ==="
     echo "You can now run perf commands manually, or use:"
-    echo "  ./scripts/perf_cache_profile.sh lookup_kernel_bench single_vocab_lookup 10"
+    echo "  ./scripts/perf_cache_profile.sh lookup_kernel_bench single_table_lookup 10"
     echo ""
 
     # Check if Docker image exists, build if not

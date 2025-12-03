@@ -1,6 +1,6 @@
 # simd-lookup
 
-High-performance SIMD utilities for fast lookups and data processing in Rust.
+High-performance SIMD utilities for fast table lookups, compression and data processing in Rust.
 
 ## Features
 
@@ -141,10 +141,11 @@ let simd_indices = get_compress_indices_u32x8(0b10110010u8);
 Cross-platform memory prefetch utilities including masked prefetch for 8 addresses at once. Supports L1/L2/L3 cache hints.
 
 ### `lookup_kernel` — High-Performance Lookup Kernels
-Production-ready SIMD lookup kernels for vocabulary/dictionary lookups:
-- `PipelinedSingleVocabU32U8Lookup` — Pipelined single-table lookup with software prefetching
-- `SimdJoinedDualVocabU32U8Lookup` — Dual-table lookup for join-like operations
-- `SimdDualVocabWithHashLookup` — Dual vocab with hash fallback for unknown keys
+Production-ready SIMD lookup kernels for dictionary/table lookups:
+- `PipelinedSingleTableU32U8Lookup` — Pipelined single-table lookup with software prefetching
+- `SimdDualTableU32U8Lookup` — Dual-table lookup for join-like operations
+- `SimdCascadingTableU32U8Lookup` — Cascading multi-table lookup with VGATHER/VCOMPRESS
+- `SimdDualTableWithHashLookup` — Dual table with hash fallback for unknown keys
 
 ### `bulk_vec_extender` — Efficient Vec Extension
 Utilities for efficiently extending `Vec` with SIMD-produced results, minimizing bounds checks and reallocations.

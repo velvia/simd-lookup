@@ -19,17 +19,17 @@ use packed_simd_2::*;
 
 // Instead of:
 for j in 0..16 {
-    if vocab1_array[j] != 0 {  // ← 16 branches!
+    if table1_array[j] != 0 {  // ← 16 branches!
         result[j] = table2[keys2[j]];
     }
 }
 
 // Do this:
 let keys_vec = u32x8::from_slice_unaligned(keys2);
-let vocab1_vec = u8x8::from_slice_unaligned(vocab1_array);
+let table1_vec = u8x8::from_slice_unaligned(table1_array);
 
-// Create mask from vocab1 (non-zero = true)
-let mask = vocab1_vec.ne(u8x8::splat(0));
+// Create mask from table1 (non-zero = true)
+let mask = table1_vec.ne(u8x8::splat(0));
 
 // Masked gather - only loads where mask is true
 let gathered = unsafe {
@@ -215,10 +215,10 @@ Only if profiling shows extraction is bottleneck:
 2. Use AVX-512 if available (perfect for this)
 3. Fallback to AVX2 with more complex code
 
-## Code Template for Unconditional Bit-Packed Dual Vocab
+## Code Template for Unconditional Bit-Packed Dual Table
 
 ```rust
-impl<S: BitPackStrategy> BitPackedDualVocab<S> {
+impl<S: BitPackStrategy> BitPackedDualTable<S> {
     /// Unconditional dual lookup - always reads both tables
     /// Fastest for cases where both values usually needed
     #[inline]

@@ -15,7 +15,7 @@ pub use eight_value_lookup::EightValueLookup;
 pub use entropy_map_lookup::{EntropyMapBitpackedLookup, EntropyMapLookup};
 pub use lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
 pub use lookup_kernel::{
-    PipelinedSingleVocabU32U8Lookup, SimdCascadingVocabU32U8Lookup, SimdDualVocabWithHashLookup,
+    PipelinedSingleTableU32U8Lookup, SimdCascadingTableU32U8Lookup, SimdDualTableWithHashLookup,
 };
 pub use simd_compress::{
     compress_store_u32x8, compress_store_u32x16, compress_store_u8x16,
