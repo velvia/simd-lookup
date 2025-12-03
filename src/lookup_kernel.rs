@@ -434,113 +434,32 @@ impl<'a> SimdDualVocabU32U8Lookup<'a> {
     }
 }
 
-/// Dual vocabulary lookup kernel with JOINED/colocated lookup tables.
-///
-/// This kernel tests the hypothesis that TLB swaps or non-colocated tables could be a performance factor.
-/// Instead of two separate lookup tables, it uses a single concatenated table:
-/// - `joined_table` = table1 ++ table2 (concatenated)
-/// - `table2_offset` = where table2 starts in the joined table (= table1.len())
-///
-/// To look up table2, we use: `joined_table[table2_offset + index2]`
-///
-/// The lookup behavior is the same as `SimdDualVocabU32U8Lookup`:
-/// - Table2 is only looked up if table1 returns a non-zero value
-/// - Results are passed to the user function as (u8x16, u8x16, num_bytes)
-#[derive(Debug, Clone)]
-pub struct SimdJoinedDualVocabU32U8Lookup<'a> {
-    joined_table: &'a [u8],
-    table2_offset: u32,
-}
-
-impl<'a> SimdJoinedDualVocabU32U8Lookup<'a> {
-    /// Creates a new joined dual vocabulary lookup kernel.
-    /// - `joined_table`: The concatenated table (table1 ++ table2)
-    /// - `table2_offset`: The offset where table2 starts (typically table1.len())
-    #[inline]
-    pub fn new(joined_table: &'a [u8], table2_offset: usize) -> Self {
-        Self {
-            joined_table,
-            table2_offset: table2_offset as u32,
-        }
-    }
-
-    /// Given two slices of equal length &[u32] indices, looks up each one and calls the user given function
-    /// on assembled u8x16 results.
-    /// - Table1 indices are used directly: joined_table[index1]
-    /// - Table2 indices are offset: joined_table[table2_offset + index2]
-    /// - Table2 is only looked up if table1 returns a non-zero value
-    #[inline]
-    pub fn lookup_func<F>(&self, values1: &[u32], values2: &[u32], f: &mut F)
-    where
-        F: FnMut(u8x16, u8x16, usize),
-    {
-        assert!(
-            values1.len() == values2.len(),
-            "Values1 and values2 must have the same length"
-        );
-        let (chunks1, rest1) = values1.as_chunks::<16>();
-        let (chunks2, rest2) = values2.as_chunks::<16>();
-
-        for (chunk1, chunk2) in chunks1.iter().zip(chunks2.iter()) {
-            // Lookup table1 directly
-            let values1 = lookup_from_offsets(self.joined_table, chunk1);
-
-            // Conditional lookup for table2 with offset - only where table1 is nonzero
-            let mut values2 = [0u8; 16];
-            for i in 0..16 {
-                if values1[i] != 0 {
-                    values2[i] = self.joined_table[(self.table2_offset + chunk2[i]) as usize];
-                }
-            }
-
-            (f)(u8x16::from(values1), u8x16::from(values2), 16);
-        }
-
-        // Handle the rest
-        if !rest1.is_empty() {
-            let mut values1 = [0u8; 16];
-            let mut values2 = [0u8; 16];
-            for i in 0..rest1.len() {
-                values1[i] = self.joined_table[rest1[i] as usize];
-                if values1[i] != 0 {
-                    values2[i] = self.joined_table[(self.table2_offset + rest2[i]) as usize];
-                }
-            }
-            (f)(u8x16::from(values1), u8x16::from(values2), rest1.len());
-        }
-    }
-
-    /// Convenience function which does dual lookup, combines the results using a user-defined combiner function,
-    /// and extends the combined results into a Vec (pushing all combined results)
-    #[inline]
-    pub fn lookup_into_vec<F>(
-        &self,
-        values1: &[u32],
-        values2: &[u32],
-        output: &mut Vec<u8>,
-        f: &mut F,
-    ) where
-        F: FnMut(u8x16, u8x16) -> u8x16,
-    {
-        assert!(
-            values1.len() == values2.len(),
-            "Values1 and values2 must have the same length"
-        );
-
-        let mut write_guard = output.bulk_extend_guard(values1.len());
-        let mut write_slice = write_guard.as_mut_slice();
-        let mut num_written = 0;
-        self.lookup_func(
-            values1,
-            values2,
-            &mut |lookedup_values1, lookedup_values2, num_bytes| {
-                let combined = (f)(lookedup_values1, lookedup_values2);
-                write_slice.write_u8x16(num_written, combined, num_bytes);
-                num_written += num_bytes;
-            },
-        );
-    }
-}
+// =================================================================================================
+// REMOVED: SimdJoinedDualVocabU32U8Lookup
+// =================================================================================================
+//
+// This kernel was an experiment testing whether TLB swaps or non-colocated lookup tables could be
+// a performance factor. The design used a single concatenated table (`joined_table = table1 ++ table2`)
+// with an offset to access table2 entries: `joined_table[table2_offset + index2]`.
+//
+// **Design:**
+// - Instead of two separate `&[u8]` lookup tables, use one contiguous allocation
+// - Table1 occupies bytes `[0..table1.len()]`
+// - Table2 occupies bytes `[table1.len()..table1.len() + table2.len()]`
+// - Lookups into table2 add the offset: `joined_table[(table2_offset + index) as usize]`
+//
+// **Hypothesis:**
+// Colocating tables might reduce TLB misses when alternating between table1 and table2 lookups,
+// since both tables would share TLB entries for the same large allocation.
+//
+// **Benchmark Results:**
+// In testing on both Intel (AVX-512) and ARM (Apple Silicon) platforms, the joined table design
+// showed NO appreciable performance wins compared to the non-joined `SimdDualVocabU32U8Lookup`.
+// The TLB hypothesis did not hold in practice - modern CPUs handle multiple large allocations
+// efficiently, and the offset arithmetic adds minor overhead that offsets any potential gains.
+//
+// The non-joined design is simpler and equally performant, so this kernel was removed.
+// =================================================================================================
 
 /// Dual vocabulary lookup kernel - u32 to u8 lookup table kernel with custom SIMD function for combining the results.
 /// It tries to eliminate thrashing by using internally the single vocab kernel to write results out first to
@@ -887,6 +806,120 @@ impl<'a> SimdCascadingVocabU32U8Lookup<'a> {
         indices_guard.set_written(num_written);
     }
 }
+
+// =================================================================================================
+// DESIGN SKETCH: Bitmap-Based Cascading Lookup (Alternative to Index-Based Design)
+// =================================================================================================
+//
+// The current `SimdCascadingVocabU32U8Lookup` outputs explicit `Vec<u32>` indices alongside results.
+// An alternative design could output **bitmaps** instead of indices, which may be advantageous in
+// certain scenarios.
+//
+// ## Current Design (Index-Based)
+//
+// ```text
+// First stage output:
+//   nonzero_results: [x, y, z, w, v]     (packed u8 values)
+//   indices:         [1, 2, 4, 7, 9]     (explicit u32 positions, 4 bytes each)
+//
+// Cascading stage:
+//   - VGATHER from values2 using indices
+//   - Combine and VCOMPRESS results + indices
+//   - Output: filtered results + filtered indices
+// ```
+//
+// ## Alternative Design (Bitmap-Based)
+//
+// ```text
+// First stage output:
+//   nonzero_results: [x, y, z, w, v]     (packed u8 values)
+//   bitmap:          0b10_1001_0110      (bits set at original positions 1,2,4,7,9)
+//
+// Cascading stage:
+//   - Process values2 sequentially in chunks aligned with bitmap
+//   - For each 16-element chunk: VCOMPRESS using bitmap bits → packed lookup keys
+//   - Combine results
+//   - Use PDEP to map result mask back to original coordinates
+//   - Output: filtered results + filtered bitmap (in original row coordinates)
+// ```
+//
+// ## Memory Footprint Comparison
+//
+// For N input elements with K nonzero results:
+// - Index-based:  K bytes (results) + 4K bytes (indices) = 5K bytes
+// - Bitmap-based: K bytes (results) + N/8 bytes (bitmap) ≈ K + N/8 bytes
+//
+// Example: N=5000, 20% density (K=1000)
+// - Index-based:  5000 bytes
+// - Bitmap-based: 1625 bytes (~3x smaller intermediate data)
+//
+// ## The PDEP Trick for Bitmap Coordinate Transformation
+//
+// After the combine function, we have a `result_mask` in **compressed coordinates** (which of the
+// packed elements survived). We need to transform this back to **original row coordinates**.
+//
+// ```text
+// input_bitmap:   0b10_1001_0110    (original positions 1,2,4,7,9 were active)
+// packed results: [x', 0, z', w', 0] (after combine: positions 0,2,3 in compressed space survived)
+// result_mask:    0b01101            (compressed coordinates: bits 0,2,3 set)
+//
+// PDEP(result_mask, input_bitmap) → 0b00_1001_0010
+//   - Deposits result_mask bits at positions specified by input_bitmap
+//   - Result: bits 1,4,7 set in original coordinates
+// ```
+//
+// The BMI2 `PDEP` instruction (available on Intel Haswell+ and AMD Zen+) enables this transformation
+// efficiently, operating on 64 bits at a time.
+//
+// ## When Bitmap Design Makes Sense
+//
+// **Use bitmap-based design when:**
+// 1. The final consumer needs a **bitmap output** (not numeric indices)
+//    - Example: Combining multiple filter results with AND/OR operations
+//    - Example: Feeding into another bitmap-based operation
+// 2. The bitmap **propagates through multiple cascade stages** without index materialization
+// 3. **Memory bandwidth is the primary bottleneck** and 3x smaller intermediates matter
+// 4. You only need **counts** (popcount on final bitmap) not actual indices
+//
+// **Use index-based design (current) when:**
+// 1. The final output requires explicit `(result, row_index)` pairs
+// 2. Indices have good **locality** (close together) - VGATHER benefits from caching
+// 3. You want **simpler code** without coordinate transformation complexity
+// 4. Density is moderate (10-30%) - most bitmap chunks are non-empty anyway
+//
+// ## Implementation Considerations
+//
+// A bitmap-based kernel would require:
+//
+// 1. **First stage**: `lookup_compress_into_bitmap()` that outputs:
+//    - `nonzero_results: Vec<u8>` (same as today)
+//    - `bitmap: Vec<u64>` (64 bits per u64, representing which rows had nonzero results)
+//
+// 2. **Cascading stage**: `cascading_lookup_bitmap()` that:
+//    - Processes values2 in chunks aligned with bitmap u64 words
+//    - Uses bitmap bits as VCOMPRESS mask to pack lookup keys
+//    - After combine, uses PDEP to transform result_mask to original coordinates
+//    - Accumulates final bitmap in original row coordinates
+//
+// 3. **Index materialization** (if needed): `bitmap_to_indices()` that:
+//    - Iterates through final bitmap, extracting set bit positions
+//    - Only called if the consumer actually needs numeric indices
+//
+// ## Tradeoffs Summary
+//
+// | Aspect                     | Index-Based (Current)      | Bitmap-Based               |
+// |----------------------------|----------------------------|----------------------------|
+// | Intermediate memory        | 5K bytes per K nonzero     | K + N/8 bytes              |
+// | Coordinate system          | Always in original coords  | Requires PDEP transform    |
+// | Final index generation     | Indices flow through       | Must iterate bitmap bits   |
+// | Code complexity            | Simpler                    | More complex               |
+// | Best for                   | Sparse results needed      | Bitmap operations/counts   |
+// | VGATHER vs VCOMPRESS       | VGATHER (scattered read)   | VCOMPRESS (sequential read)|
+//
+// The current index-based design is preferred when explicit indices are needed in the output.
+// The bitmap-based design would be advantageous only when the downstream consumer operates on
+// bitmaps directly, avoiding the index materialization step entirely.
+// =================================================================================================
 
 
 #[cfg(test)]

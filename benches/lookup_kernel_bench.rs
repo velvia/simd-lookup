@@ -5,7 +5,7 @@ use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 // use simd_lookup::entropy_map_lookup::EntropyMapLookup;
 use simd_lookup::lookup_kernel::{
     SimdCascadingVocabU32U8Lookup, SimdDualVocabU32U8Lookup, SimdDualVocabU32U8LookupV2,
-    SimdDualVocabWithHashLookup, SimdJoinedDualVocabU32U8Lookup, SimdSingleVocabU32U8Lookup,
+    SimdDualVocabWithHashLookup, SimdSingleVocabU32U8Lookup,
 };
 use simd_lookup::{PipelinedSingleVocabU32U8Lookup, compress_store_u8x16, compress_store_u32x16};
 use wide::{u8x16, u32x16};
@@ -245,67 +245,27 @@ fn bench_dual_vocab_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdJoinedDualVocabU32U8Lookup - tests colocated/joined lookup tables
-/// to see if TLB swaps or non-colocated tables could be a performance factor.
-fn bench_joined_dual_vocab_lookup(c: &mut Criterion) {
-    let table_size = 15_000_000;
-    let density = 20.0; // 20% density
-    let chunk_size = 5000;
-
-    println!(
-        "Creating joined dual lookup table: {} entries each, {}% density",
-        table_size, density
-    );
-
-    // Create separate entries for table1 and table2
-    let entries1 = create_sparse_entries_for_kernel(table_size, density);
-    let entries2 = create_sparse_entries_for_kernel(table_size, density);
-    let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
-    let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-
-    // Create joined table: table1 ++ table2
-    let mut joined_table = lookup_table1.clone();
-    let table2_offset = joined_table.len();
-    joined_table.extend_from_slice(&lookup_table2);
-
-    println!(
-        "Joined table size: {} bytes, table2_offset: {}",
-        joined_table.len(),
-        table2_offset
-    );
-
-    let lookup = SimdJoinedDualVocabU32U8Lookup::new(&joined_table, table2_offset);
-
-    // Create 1 million test values (two sets, divisible by chunk_size)
-    let num_values = 1_000_000;
-    let test_values1 = create_test_values(num_values, table_size);
-    let test_values2 = create_test_values(num_values, table_size);
-
-    let mut group = c.benchmark_group("joined_dual_vocab_lookup");
-    group.throughput(Throughput::Elements(num_values as u64));
-
-    group.bench_function("chunks_of_5000_bitwise_and", |b| {
-        b.iter(|| {
-            let mut all_results = Vec::new();
-            // Process in chunks
-            for (chunk1, chunk2) in test_values1
-                .chunks_exact(chunk_size)
-                .zip(test_values2.chunks_exact(chunk_size))
-            {
-                // Use bitwise AND as the combiner function, but write results to a Vec
-                lookup.lookup_into_vec(
-                    black_box(chunk1),
-                    black_box(chunk2),
-                    &mut all_results,
-                    &mut |v1, v2| v1 & v2,
-                );
-            }
-            black_box(all_results);
-        })
-    });
-
-    group.finish();
-}
+// =================================================================================================
+// REMOVED: bench_joined_dual_vocab_lookup
+// =================================================================================================
+//
+// This benchmark tested SimdJoinedDualVocabU32U8Lookup, which concatenated two lookup tables into
+// a single allocation to test whether TLB locality would improve performance.
+//
+// **Design tested:**
+// - `joined_table = table1 ++ table2` (concatenated)
+// - Table2 accessed via: `joined_table[table2_offset + index]`
+//
+// **Benchmark results:**
+// Tested with 15M entries per table, 20% density, processing 1M values in chunks of 5000.
+// On both Intel (AVX-512) and ARM (Apple Silicon) platforms, the joined table design showed
+// NO appreciable performance wins compared to `SimdDualVocabU32U8Lookup` with separate tables.
+//
+// The hypothesis that TLB swaps between two large tables would be a performance bottleneck
+// did not hold in practice. Modern CPU TLBs handle multiple large allocations efficiently.
+//
+// The benchmark and kernel were removed since the simpler non-joined design is equally fast.
+// =================================================================================================
 
 /// Benchmark SimdDualVocabU32U8LookupV2 with varying second lookup table sizes
 /// Takes bitwise AND of the two lookup results and writes nonzero u8's into a Vec
@@ -684,7 +644,7 @@ criterion_group!(
     bench_single_vocab_lookup,
     bench_pipelined_single_vocab_lookup,
     bench_dual_vocab_lookup,
-    bench_joined_dual_vocab_lookup,
+    // bench_joined_dual_vocab_lookup removed - see comments above for benchmark results
     bench_dual_vocab_lookup_v2,
     bench_dual_vocab_lookup_v2_simple,
     bench_dual_vocab_with_hash,
