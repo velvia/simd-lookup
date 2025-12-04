@@ -117,6 +117,27 @@ let mask_vec: u64x8 = u64x8::from_bitmask(mask);
 | `u64x8` | `VPBROADCASTQ` + mask | Loop |
 | `u32x8` | `VPBROADCASTD` + mask | Loop |
 
+### Double (`double()` method on `WideUtilsExt`)
+
+Efficiently double each element via `self + self`. Addition is well-supported on all architectures (NEON `vaddq`, SSE `paddb`), making this the most efficient way to multiply by powers of 2:
+
+```rust
+use simd_lookup::WideUtilsExt;
+use wide::u8x16;
+
+let a = u8x16::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+
+// x * 2
+let doubled = a.double();
+// doubled == [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]
+
+// x * 8 (chain three doubles)
+let times_8 = a.double().double().double();
+// times_8 == [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128]
+```
+
+This is more efficient than scalar multiplication for types like `u8x16` where x86 lacks native byte multiply/shift instructions.
+
 ### Shuffle Index Tables
 
 Pre-computed shuffle indices for compress operations (256 entries for 8-element masks):
@@ -134,7 +155,7 @@ let simd_indices = get_compress_indices_u32x8(0b10110010u8);
 
 ## Other Modules
 
-### `table64` — Small Table SIMD Lookup
+### `small_table` — Small Table SIMD Lookup
 64-entry lookup table optimized for NEON `TBL4` and AVX-512 `VPERMB`. Useful for fast pattern detection and small dictionary lookups.
 
 ### `prefetch` — SIMD Memory Prefetch

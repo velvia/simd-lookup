@@ -7,7 +7,7 @@ pub mod lookup_kernel;
 pub mod prefetch;
 pub mod simd_compress;
 pub mod simd_gather;
-pub mod table64;
+pub mod small_table;
 pub mod wide_utils;
 
 // Re-export the main types for convenience

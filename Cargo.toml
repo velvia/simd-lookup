@@ -13,7 +13,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
 
 [[bench]]
-name = "table64_bench"
+name = "small_table_bench"
 harness = false
 
 [[bench]]

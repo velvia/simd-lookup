@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use simd_lookup::table64::Table64;
+use simd_lookup::small_table::Table64;
 use wide::u8x16;
 
 fn create_test_table() -> [u8; 64] {

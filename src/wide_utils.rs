@@ -119,6 +119,23 @@ pub trait WideUtilsExt: Sized {
     /// Shuffle elements according to the given indices (indices are same SIMD type).
     /// `result[i] = self[indices[i]]`
     fn shuffle(self, indices: Self) -> Self;
+
+    /// Double each element (self + self). Wraps on overflow.
+    ///
+    /// This is the most efficient way to multiply by 2 since addition is
+    /// well-supported on all SIMD architectures (NEON `vaddq`, SSE `paddq`).
+    ///
+    /// For multiply by powers of 2, chain calls:
+    /// - `x.double()` = x * 2
+    /// - `x.double().double()` = x * 4
+    /// - `x.double().double().double()` = x * 8
+    #[inline(always)]
+    fn double(self) -> Self
+    where
+        Self: std::ops::Add<Output = Self> + Copy,
+    {
+        self + self
+    }
 }
 
 /// Trait for creating SIMD vectors from bitmasks
@@ -147,6 +164,7 @@ pub trait SimdSplit: Sized {
         self.split_low_high().1
     }
 }
+
 
 // =============================================================================
 // SimdSplit Implementations
@@ -378,6 +396,7 @@ impl FromBitmask<u32> for u32x8 {
         }
     }
 }
+
 
 // =============================================================================
 // x86_64 Implementations
@@ -780,6 +799,11 @@ fn shuffle_u8x16_scalar(input: u8x16, indices: u8x16) -> u8x16 {
 }
 
 // =============================================================================
+// Scalar Mul/Div Implementations
+// =============================================================================
+
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -920,5 +944,39 @@ mod tests {
         let indices = u32x4::from([0, 0, 0, 0]);
         let result = input.shuffle(indices);
         assert_eq!(result.to_array(), [10, 10, 10, 10]);
+    }
+
+    #[test]
+    fn test_double_u8x16() {
+        let a = u8x16::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        let result = a.double();
+        assert_eq!(
+            result.to_array(),
+            [2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]
+        );
+    }
+
+    #[test]
+    fn test_double_triple_for_x8() {
+        // x.double().double().double() = x * 8
+        let a = u8x16::from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        let result = a.double().double().double();
+        assert_eq!(
+            result.to_array(),
+            [8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128]
+        );
+    }
+
+    #[test]
+    fn test_double_overflow() {
+        // Test wrapping: 128 * 2 = 256 wraps to 0
+        let a = u8x16::splat(128);
+        let result = a.double();
+        assert_eq!(result.to_array(), [0u8; 16]);
+
+        // 200 * 2 = 400 wraps to 144
+        let a = u8x16::splat(200);
+        let result = a.double();
+        assert_eq!(result.to_array(), [144u8; 16]); // 400 & 0xFF = 144
     }
 }
