@@ -10,7 +10,8 @@ use core::arch::aarch64::{uint8x16x4_t, vld1q_u8, vqtbl4q_u8, vst1q_u8};
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use core::arch::x86_64::{
-    __m512i, _mm512_loadu_si512, _mm512_permutexvar_epi8, _mm512_storeu_si512,
+    __m128i, __m512i, _mm_loadu_si128, _mm_storeu_si128, _mm512_castsi128_si512,
+    _mm512_castsi512_si128, _mm512_loadu_si512, _mm512_permutexvar_epi8, _mm512_storeu_si512,
 };
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -98,13 +99,17 @@ impl Table64 {
         {
             if let Some(tzmm) = self.zmm {
                 unsafe {
-                    let iv = _mm512_loadu_si512(idx.as_array().as_ptr() as *const __m512i);
+                    // Load only 16 bytes (safe) into XMM register
+                    let iv_128 = _mm_loadu_si128(idx.as_array().as_ptr() as *const __m128i);
+                    // Zero-cost cast to ZMM (upper bytes undefined, but we don't use them)
+                    let iv = _mm512_castsi128_si512(iv_128);
+                    // VPERMB: only first 16 result bytes are valid
                     let rv = _mm512_permutexvar_epi8(iv, tzmm);
-                    let mut out = [0u8; 64];
-                    _mm512_storeu_si512(out.as_mut_ptr() as *mut __m512i, rv);
-                    // Only take the first 16 bytes
+                    // Extract low 128 bits (zero latency - register rename)
+                    let rv_128 = _mm512_castsi512_si128(rv);
+                    // Store only 16 bytes
                     let mut result = [0u8; 16];
-                    result.copy_from_slice(&out[0..16]);
+                    _mm_storeu_si128(result.as_mut_ptr() as *mut __m128i, rv_128);
                     u8x16::from(result)
                 }
             } else {
