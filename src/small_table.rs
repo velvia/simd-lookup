@@ -1,8 +1,9 @@
 //! SIMD enabled efficient small table lookups - for 64 entries or 64K entries.
 //! May be 2-D lookups as well.
 
+use crate::simd_gather::gather_u32index_u8;
 use crate::wide_utils::WideUtilsExt;
-use wide::u8x16;
+use wide::{u8x16, u16x16, u32x16};
 
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::{uint8x16x4_t, vld1q_u8, vqtbl4q_u8, vst1q_u8};
@@ -204,6 +205,174 @@ impl Table64 {
         compile_error!(
             "Table64::lookup is implemented for aarch64 (NEON) and x86/x86_64 (AVX-512VBMI)."
         );
+    }
+}
+
+// =============================================================================
+// Table2dU8xU8 - 2D lookup table with up to 64K entries (256×256)
+// =============================================================================
+
+/// A 2D SIMD lookup table for `u8 × u8` coordinates, supporting up to 64K entries.
+///
+/// This table stores data in row-major order and uses SIMD gather operations for
+/// efficient parallel lookups. Each lookup takes a row index (0..num_rows) and
+/// column index (0..num_cols), both as u8, and returns the corresponding value.
+///
+/// # Index Calculation
+///
+/// For row `r` and column `c`, the flat index is: `index = r * num_cols + c`
+///
+/// Since row and column are both u8 (max 255), and num_cols is at most 256,
+/// the maximum index is 255 * 256 + 255 = 65535, which fits in u16.
+///
+/// # Example
+///
+/// ```ignore
+/// // Create a 16x16 multiplication table
+/// let mut data = vec![0u8; 256];
+/// for r in 0..16u8 {
+///     for c in 0..16u8 {
+///         data[(r as usize) * 16 + (c as usize)] = r.wrapping_mul(c);
+///     }
+/// }
+/// let table = Table2dU8xU8::from_flat(&data, 16);
+///
+/// // Look up multiple (row, col) pairs in parallel
+/// let rows = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+/// let cols = u8x16::splat(5);  // All looking up column 5
+/// let result = table.lookup_one(rows, cols);
+/// // result[i] = i * 5
+/// ```
+pub struct Table2dU8xU8 {
+    data: Vec<u8>,
+    num_cols: u16,
+}
+
+impl Table2dU8xU8 {
+    /// Create a 2D table from a flat slice with the given number of columns.
+    ///
+    /// The data is stored in row-major order: `data[row * num_cols + col]`.
+    ///
+    /// # Arguments
+    /// - `data`: Flat slice of values, length must be `num_rows * num_cols`
+    /// - `num_cols`: Number of columns per row (1..=256)
+    ///
+    /// # Panics
+    /// - Panics if `num_cols` is 0 or greater than 256
+    /// - Panics if `data.len()` is not a multiple of `num_cols`
+    /// - Panics if `data.len() > 65536`
+    #[inline]
+    pub fn from_flat(data: &[u8], num_cols: usize) -> Self {
+        assert!(num_cols > 0 && num_cols <= 256, "num_cols must be 1..=256");
+        assert!(data.len() % num_cols == 0, "data length must be multiple of num_cols");
+        assert!(data.len() <= 65536, "data length must be <= 65536 (64K entries)");
+
+        Self {
+            data: data.to_vec(),
+            num_cols: num_cols as u16,
+        }
+    }
+
+    /// Create a 2D table from a 2D matrix (Vec of rows).
+    ///
+    /// All rows must have the same length.
+    ///
+    /// # Panics
+    /// - Panics if the matrix is empty
+    /// - Panics if rows have different lengths
+    /// - Panics if total size exceeds 65536
+    #[inline]
+    pub fn from_2d(matrix: &[&[u8]]) -> Self {
+        assert!(!matrix.is_empty(), "matrix cannot be empty");
+        let num_cols = matrix[0].len();
+        assert!(num_cols > 0 && num_cols <= 256, "num_cols must be 1..=256");
+        assert!(matrix.iter().all(|row| row.len() == num_cols), "all rows must have same length");
+        assert!(matrix.len() * num_cols <= 65536, "total size must be <= 65536");
+
+        let mut data = Vec::with_capacity(matrix.len() * num_cols);
+        for row in matrix {
+            data.extend_from_slice(row);
+        }
+
+        Self {
+            data,
+            num_cols: num_cols as u16,
+        }
+    }
+
+    /// Returns the number of columns per row.
+    #[inline]
+    pub fn num_cols(&self) -> usize {
+        self.num_cols as usize
+    }
+
+    /// Returns the number of rows in the table.
+    #[inline]
+    pub fn num_rows(&self) -> usize {
+        self.data.len() / self.num_cols as usize
+    }
+
+    /// Returns the total number of entries in the table.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns true if the table is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Look up 16 values in parallel using (row, col) coordinates.
+    ///
+    /// Computes `result[i] = table[rows[i]][cols[i]]` for all 16 lanes.
+    ///
+    /// # Arguments
+    /// - `rows`: Row indices (0..num_rows) for each of the 16 lanes
+    /// - `cols`: Column indices (0..num_cols) for each of the 16 lanes
+    ///
+    /// # Safety
+    /// In debug mode, asserts that all indices are in bounds.
+    /// In release mode, out-of-bounds access is undefined behavior.
+    #[inline]
+    pub fn lookup_one(&self, rows: u8x16, cols: u8x16) -> u8x16 {
+        // Widen u8x16 → u16x16 for arithmetic
+        let rows_u16: u16x16 = u16x16::from(rows);
+        let cols_u16: u16x16 = u16x16::from(cols);
+        let num_cols_u16 = u16x16::splat(self.num_cols);
+
+        // index = row * num_cols + col (all in u16x16)
+        let indices_u16 = rows_u16 * num_cols_u16 + cols_u16;
+
+        // Widen u16x16 → u32x16 for gather
+        let indices_u32: u32x16 = u32x16::from(indices_u16);
+
+        // Debug bounds check
+        #[cfg(debug_assertions)]
+        {
+            let idx_arr = indices_u32.to_array();
+            for (i, &idx) in idx_arr.iter().enumerate() {
+                debug_assert!(
+                    (idx as usize) < self.data.len(),
+                    "Index out of bounds at lane {}: {} >= {}",
+                    i, idx, self.data.len()
+                );
+            }
+        }
+
+        // Use SIMD gather (AVX-512 on x86, scalar fallback elsewhere)
+        gather_u32index_u8(indices_u32, &self.data, 1)
+    }
+
+    /// Scalar lookup for a single (row, col) coordinate.
+    ///
+    /// # Panics
+    /// Panics if row or col is out of bounds.
+    #[inline]
+    pub fn get(&self, row: u8, col: u8) -> u8 {
+        let index = (row as usize) * (self.num_cols as usize) + (col as usize);
+        self.data[index]
     }
 }
 
@@ -534,6 +703,186 @@ mod tests {
             result_1d.to_array(),
             "lookup_one_2d should match lookup_one with computed indices"
         );
+    }
+
+    // ==================== Table2dU8xU8 Tests ====================
+
+    /// Create a test table where value = row * 10 + col
+    fn create_table2d_test_data(num_rows: usize, num_cols: usize) -> Vec<u8> {
+        let mut data = Vec::with_capacity(num_rows * num_cols);
+        for r in 0..num_rows {
+            for c in 0..num_cols {
+                data.push(((r * 10 + c) % 256) as u8);
+            }
+        }
+        data
+    }
+
+    #[test]
+    fn test_table2d_from_flat_basic() {
+        let data = create_table2d_test_data(16, 16);
+        let table = Table2dU8xU8::from_flat(&data, 16);
+
+        assert_eq!(table.num_rows(), 16);
+        assert_eq!(table.num_cols(), 16);
+        assert_eq!(table.len(), 256);
+    }
+
+    #[test]
+    fn test_table2d_from_2d() {
+        let row0: &[u8] = &[0, 1, 2, 3];
+        let row1: &[u8] = &[10, 11, 12, 13];
+        let row2: &[u8] = &[20, 21, 22, 23];
+        let matrix: &[&[u8]] = &[row0, row1, row2];
+
+        let table = Table2dU8xU8::from_2d(matrix);
+
+        assert_eq!(table.num_rows(), 3);
+        assert_eq!(table.num_cols(), 4);
+        assert_eq!(table.len(), 12);
+
+        // Verify scalar lookup
+        assert_eq!(table.get(0, 0), 0);
+        assert_eq!(table.get(0, 3), 3);
+        assert_eq!(table.get(1, 0), 10);
+        assert_eq!(table.get(2, 3), 23);
+    }
+
+    #[test]
+    fn test_table2d_lookup_one_basic() {
+        let data = create_table2d_test_data(16, 16);
+        let table = Table2dU8xU8::from_flat(&data, 16);
+
+        // Look up row 0, cols 0..15
+        let rows = u8x16::splat(0);
+        let cols = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+
+        // Row 0: values are 0, 1, 2, ..., 15
+        for i in 0..16 {
+            assert_eq!(result_arr[i], i as u8, "Row 0, col {}", i);
+        }
+    }
+
+    #[test]
+    fn test_table2d_lookup_one_different_rows() {
+        let data = create_table2d_test_data(16, 16);
+        let table = Table2dU8xU8::from_flat(&data, 16);
+
+        // Look up different rows, same column
+        let rows = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let cols = u8x16::splat(5);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+
+        // Column 5: values are 5, 15, 25, 35, ... (row * 10 + 5)
+        for i in 0..16 {
+            let expected = ((i * 10 + 5) % 256) as u8;
+            assert_eq!(result_arr[i], expected, "Row {}, col 5", i);
+        }
+    }
+
+    #[test]
+    fn test_table2d_lookup_one_scattered() {
+        let data = create_table2d_test_data(16, 16);
+        let table = Table2dU8xU8::from_flat(&data, 16);
+
+        // Scattered lookups
+        let rows = u8x16::from([0, 5, 10, 15, 3, 8, 12, 1, 7, 14, 2, 9, 4, 11, 6, 13]);
+        let cols = u8x16::from([0, 15, 5, 10, 3, 8, 12, 1, 7, 14, 2, 9, 4, 11, 6, 13]);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+        let rows_arr = rows.to_array();
+        let cols_arr = cols.to_array();
+
+        for i in 0..16 {
+            let expected = ((rows_arr[i] as usize * 10 + cols_arr[i] as usize) % 256) as u8;
+            assert_eq!(
+                result_arr[i], expected,
+                "Mismatch at lane {}: row={}, col={}, expected={}, got={}",
+                i, rows_arr[i], cols_arr[i], expected, result_arr[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_table2d_lookup_matches_scalar() {
+        let data = create_table2d_test_data(32, 20);
+        let table = Table2dU8xU8::from_flat(&data, 20);
+
+        let rows = u8x16::from([0, 5, 10, 15, 20, 25, 30, 31, 1, 6, 11, 16, 21, 26, 28, 29]);
+        let cols = u8x16::from([0, 5, 10, 15, 19, 0, 5, 10, 1, 6, 11, 16, 18, 1, 6, 11]);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+        let rows_arr = rows.to_array();
+        let cols_arr = cols.to_array();
+
+        // Verify against scalar get()
+        for i in 0..16 {
+            let expected = table.get(rows_arr[i], cols_arr[i]);
+            assert_eq!(
+                result_arr[i], expected,
+                "Mismatch at lane {}: SIMD={}, scalar={}",
+                i, result_arr[i], expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_table2d_large_table() {
+        // 256 × 256 = 64K entries (maximum size)
+        let mut data = vec![0u8; 65536];
+        for r in 0..256 {
+            for c in 0..256 {
+                data[r * 256 + c] = (r ^ c) as u8; // XOR pattern
+            }
+        }
+        let table = Table2dU8xU8::from_flat(&data, 256);
+
+        assert_eq!(table.num_rows(), 256);
+        assert_eq!(table.num_cols(), 256);
+
+        // Test some lookups
+        let rows = u8x16::from([0, 255, 128, 64, 32, 16, 8, 4, 2, 1, 100, 200, 50, 150, 75, 175]);
+        let cols = u8x16::from([255, 0, 128, 64, 32, 16, 8, 4, 2, 1, 50, 100, 200, 75, 175, 150]);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+        let rows_arr = rows.to_array();
+        let cols_arr = cols.to_array();
+
+        for i in 0..16 {
+            let expected = rows_arr[i] ^ cols_arr[i];
+            assert_eq!(result_arr[i], expected, "XOR mismatch at lane {}", i);
+        }
+    }
+
+    #[test]
+    fn test_table2d_non_power_of_two_cols() {
+        // Test with 17 columns (not power of 2)
+        let data = create_table2d_test_data(10, 17);
+        let table = Table2dU8xU8::from_flat(&data, 17);
+
+        assert_eq!(table.num_rows(), 10);
+        assert_eq!(table.num_cols(), 17);
+
+        let rows = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5]);
+        let cols = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 15, 14, 13, 12, 11]);
+
+        let result = table.lookup_one(rows, cols);
+        let result_arr = result.to_array();
+        let rows_arr = rows.to_array();
+        let cols_arr = cols.to_array();
+
+        for i in 0..16 {
+            let expected = table.get(rows_arr[i], cols_arr[i]);
+            assert_eq!(result_arr[i], expected, "Mismatch at lane {}", i);
+        }
     }
 }
 
