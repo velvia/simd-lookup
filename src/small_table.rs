@@ -3,6 +3,7 @@
 
 use crate::simd_gather::gather_u32index_u8;
 use crate::wide_utils::WideUtilsExt;
+use std::fmt;
 use wide::{u8x16, u16x16, u32x16};
 
 #[cfg(target_arch = "aarch64")]
@@ -160,6 +161,28 @@ impl Table64 {
         self.lookup_one(idx)
     }
 
+    /// Get the underlying bytes array (for debugging/display purposes).
+    /// This extracts the data from platform-specific storage.
+    #[inline]
+    fn as_bytes(&self) -> [u8; 64] {
+        #[cfg(target_arch = "aarch64")]
+        {
+            unsafe {
+                let mut bytes = [0u8; 64];
+                vst1q_u8(bytes.as_mut_ptr(), self.neon_tbl.0);
+                vst1q_u8(bytes.as_mut_ptr().add(16), self.neon_tbl.1);
+                vst1q_u8(bytes.as_mut_ptr().add(32), self.neon_tbl.2);
+                vst1q_u8(bytes.as_mut_ptr().add(48), self.neon_tbl.3);
+                bytes
+            }
+        }
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            self.bytes
+        }
+    }
+
     /// Dynamic lookup: each byte of `idx[k]` (0..63) selects from this 64B table.
     /// - Requires: `idx.len() == out.len()`
     /// - No element tails (I/O is in whole `u8x16` blocks).
@@ -213,6 +236,36 @@ impl Table64 {
     }
 }
 
+impl Clone for Table64 {
+    fn clone(&self) -> Self {
+        let bytes = self.as_bytes();
+        Self::new(&bytes)
+    }
+}
+
+impl Default for Table64 {
+    fn default() -> Self {
+        Self::new(&[0u8; 64])
+    }
+}
+
+impl fmt::Debug for Table64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let bytes = self.as_bytes();
+        writeln!(f, "Table64 {{")?;
+        writeln!(f, "        col 0  col 1  col 2  col 3  col 4  col 5  col 6  col 7")?;
+        for row in 0..8 {
+            write!(f, "row {}: ", row)?;
+            for col in 0..8 {
+                let idx = row * 8 + col;
+                write!(f, "{:5} ", bytes[idx])?;
+            }
+            writeln!(f)?;
+        }
+        write!(f, "}}")
+    }
+}
+
 // =============================================================================
 // Table2dU8xU8 - 2D lookup table with up to 64K entries (256×256)
 // =============================================================================
@@ -248,6 +301,7 @@ impl Table64 {
 /// let result = table.lookup_one(rows, cols);
 /// // result[i] = i * 5
 /// ```
+#[derive(Clone, Default)]
 pub struct Table2dU8xU8 {
     data: Vec<u8>,
     num_cols: u16,
@@ -381,6 +435,58 @@ impl Table2dU8xU8 {
     }
 }
 
+impl fmt::Debug for Table2dU8xU8 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let num_rows = self.num_rows();
+        let num_cols = self.num_cols as usize;
+
+        writeln!(f, "Table2dU8xU8 {{")?;
+        writeln!(f, "  dimensions: {} rows × {} cols", num_rows, num_cols)?;
+
+        if self.data.is_empty() {
+            return write!(f, "  (empty)}}");
+        }
+
+        // Limit display to reasonable size: max 20 rows and 20 cols
+        const MAX_DISPLAY_ROWS: usize = 20;
+        const MAX_DISPLAY_COLS: usize = 20;
+
+        let display_rows = num_rows.min(MAX_DISPLAY_ROWS);
+        let display_cols = num_cols.min(MAX_DISPLAY_COLS);
+        let show_row_ellipsis = num_rows > MAX_DISPLAY_ROWS;
+        let show_col_ellipsis = num_cols > MAX_DISPLAY_COLS;
+
+        // Print column headers
+        write!(f, "  ")?;
+        for col in 0..display_cols {
+            write!(f, " col{:3}", col)?;
+        }
+        if show_col_ellipsis {
+            write!(f, " ...")?;
+        }
+        writeln!(f)?;
+
+        // Print rows
+        for row in 0..display_rows {
+            write!(f, "  row{:3}:", row)?;
+            for col in 0..display_cols {
+                let idx = row * num_cols + col;
+                write!(f, "{:5}", self.data[idx])?;
+            }
+            if show_col_ellipsis {
+                write!(f, " ...")?;
+            }
+            writeln!(f)?;
+        }
+
+        if show_row_ellipsis {
+            writeln!(f, "  ...")?;
+        }
+
+        write!(f, "}}")
+    }
+}
+
 // ------------------
 // Helpers
 // ------------------
@@ -434,7 +540,8 @@ mod tests {
     #[test]
     fn test_table64_new() {
         let table_data = create_test_table();
-        let _table = Table64::new(&table_data);
+        let table = Table64::new(&table_data);
+        println!("\n{:?}", table);
         // Just ensure construction doesn't panic
     }
 
@@ -728,6 +835,7 @@ mod tests {
         let data = create_table2d_test_data(16, 16);
         let table = Table2dU8xU8::from_flat(&data, 16);
 
+        println!("\n{:?}", table);
         assert_eq!(table.num_rows(), 16);
         assert_eq!(table.num_cols(), 16);
         assert_eq!(table.len(), 256);
