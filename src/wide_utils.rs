@@ -593,24 +593,88 @@ unsafe fn widen_u32x4_to_u64x4_neon_raw(input: uint32x4_t) -> (uint64x2_t, uint6
     (low, high)
 }
 
+/// NEON-optimized u64x8 from bitmask using parallel bit extraction.
+/// Uses NEON compare to expand 8 bits into 8 u64 values (0 or u64::MAX).
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[target_feature(enable = "neon")]
 unsafe fn u64x8_from_bitmask_neon(mask: u8) -> u64x8 {
-    let mut values = [0u64; 8];
-    for (i, value) in values.iter_mut().enumerate() {
-        *value = if (mask >> i) & 1 != 0 { u64::MAX } else { 0 };
+    unsafe {
+        // Bit pattern for testing each bit position
+        static BIT_PATTERN: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+
+        // Broadcast the mask to all 8 lanes
+        let mask_vec = vdup_n_u8(mask);
+
+        // Load the bit pattern
+        let bits = vld1_u8(BIT_PATTERN.as_ptr());
+
+        // AND mask with bit pattern, then compare to isolate each bit
+        let anded = vand_u8(mask_vec, bits);
+        let cmp = vceq_u8(anded, bits); // 0xFF where bit is set, 0x00 otherwise
+
+        // Use SIGNED widening to sign-extend 0xFF (-1) to 0xFFFF, 0xFFFFFFFF, etc.
+        // Reinterpret the u8 comparison result as signed i8
+        let cmp_signed = vreinterpret_s8_u8(cmp);
+
+        // Signed widen: i8 -> i16 -> i32 -> i64
+        // -1 (0xFF) becomes -1 (0xFFFF), then -1 (0xFFFFFFFF), then -1 (0xFFFFFFFFFFFFFFFF)
+        let wide16 = vmovl_s8(cmp_signed);
+
+        let wide32_lo = vmovl_s16(vget_low_s16(wide16));
+        let wide32_hi = vmovl_s16(vget_high_s16(wide16));
+
+        let wide64_0 = vmovl_s32(vget_low_s32(wide32_lo));
+        let wide64_1 = vmovl_s32(vget_high_s32(wide32_lo));
+        let wide64_2 = vmovl_s32(vget_low_s32(wide32_hi));
+        let wide64_3 = vmovl_s32(vget_high_s32(wide32_hi));
+
+        // Reinterpret back to unsigned and store
+        let mut result = [0u64; 8];
+        vst1q_u64(result.as_mut_ptr(), vreinterpretq_u64_s64(wide64_0));
+        vst1q_u64(result.as_mut_ptr().add(2), vreinterpretq_u64_s64(wide64_1));
+        vst1q_u64(result.as_mut_ptr().add(4), vreinterpretq_u64_s64(wide64_2));
+        vst1q_u64(result.as_mut_ptr().add(6), vreinterpretq_u64_s64(wide64_3));
+
+        u64x8::from(result)
     }
-    u64x8::from(values)
 }
 
+/// NEON-optimized u32x8 from bitmask using parallel bit extraction.
+/// Uses NEON compare to expand 8 bits into 8 u32 values (0 or u32::MAX).
 #[cfg(target_arch = "aarch64")]
 #[inline]
+#[target_feature(enable = "neon")]
 unsafe fn u32x8_from_bitmask_neon(mask: u8) -> u32x8 {
-    let mut values = [0u32; 8];
-    for (i, value) in values.iter_mut().enumerate() {
-        *value = if (mask >> i) & 1 != 0 { u32::MAX } else { 0 };
+    unsafe {
+        // Bit pattern for testing each bit position
+        static BIT_PATTERN: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+
+        // Broadcast the mask to all 8 lanes
+        let mask_vec = vdup_n_u8(mask);
+
+        // Load the bit pattern
+        let bits = vld1_u8(BIT_PATTERN.as_ptr());
+
+        // AND mask with bit pattern, then compare to isolate each bit
+        let anded = vand_u8(mask_vec, bits);
+        let cmp = vceq_u8(anded, bits); // 0xFF where bit is set, 0x00 otherwise
+
+        // Use SIGNED widening to sign-extend 0xFF (-1) to 0xFFFFFFFF
+        let cmp_signed = vreinterpret_s8_u8(cmp);
+
+        // Signed widen: i8 -> i16 -> i32
+        let wide16 = vmovl_s8(cmp_signed);
+        let wide32_lo = vmovl_s16(vget_low_s16(wide16));
+        let wide32_hi = vmovl_s16(vget_high_s16(wide16));
+
+        // Reinterpret back to unsigned and store
+        let mut result = [0u32; 8];
+        vst1q_u32(result.as_mut_ptr(), vreinterpretq_u32_s32(wide32_lo));
+        vst1q_u32(result.as_mut_ptr().add(4), vreinterpretq_u32_s32(wide32_hi));
+
+        u32x8::from(result)
     }
-    u32x8::from(values)
 }
 
 /// NEON u8x16 shuffle using TBL instruction

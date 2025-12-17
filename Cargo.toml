@@ -28,6 +28,10 @@ harness = false
 name = "lookup_kernel_bench"
 harness = false
 
+[[bench]]
+name = "simd_compress_bench"
+harness = false
+
 [[example]]
 name = "eight_value_demo"
 

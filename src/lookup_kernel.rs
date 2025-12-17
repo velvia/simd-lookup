@@ -11,9 +11,11 @@
 //! especially fast for multiple table lookups and combinations thereof.
 //! It turns out these don't significantly improve on a series of scalar lookups.
 //!
-//! # CPU Feature Requirements (Intel x86_64)
+//! # CPU Feature Requirements
 //!
-//! ## Cascading Lookup Kernel (`SimdCascadingTableU32U8Lookup`)
+//! ## Intel x86_64 (AVX-512)
+//!
+//! ### Cascading Lookup Kernel (`SimdCascadingTableU32U8Lookup`)
 //!
 //! The cascading kernel is heavily optimized for AVX-512 and provides significant performance
 //! improvements (40-50% speedup) over scalar implementations on large tables.
@@ -27,8 +29,28 @@
 //!
 //! **Available on**: Intel Ice Lake, Tiger Lake, and later (not available on Skylake-X)
 //!
-//! **Fallback**: All kernels fall back to scalar implementations when AVX-512 features are
-//! not available. The scalar fallback works on all architectures but is significantly slower.
+//! ## ARM aarch64 (Apple Silicon M1/M2/M3)
+//!
+//! On ARM processors, the compress operations (`compress_store_u8x16`, `compress_store_u32x8`, etc.)
+//! use NEON-optimized implementations that provide significant speedups over scalar fallbacks:
+//!
+//! - **`compress_store_u8x16`**: Uses NEON `TBL` instruction with precomputed shuffle indices
+//!   - Eliminates 16 conditional branches from the scalar fallback
+//!   - Single `vqtbl1q_u8` instruction performs all 16-byte shuffle
+//!
+//! - **`compress_store_u32x8`**: Uses NEON `TBL2` instruction with byte-level indices
+//!   - Precomputed 256×32 byte index table avoids runtime index conversion
+//!   - Uses `vqtbl2q_u8` for efficient 32-byte permutation
+//!
+//! - **Bitmask expansion**: Uses NEON parallel bit operations (`vceq`, `vmovl`)
+//!   - Converts 8-bit mask to vector mask without scalar loops
+//!
+//! These optimizations are automatically enabled on ARM and require no user configuration.
+//!
+//! ## Fallback Behavior
+//!
+//! All kernels fall back to scalar/shuffle implementations when architecture-specific
+//! features are not available. The fallback works on all architectures.
 //!
 //! ## Other Kernels
 //!

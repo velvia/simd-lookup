@@ -21,9 +21,9 @@ features (Ice Lake+).
 
 | Module/Feature | Required CPU Features | Available CPUs | Fallback |
 |----------------|----------------------|----------------|----------|
-| **simd_compress** (`compress_store_u32x8`) | AVX512F + AVX512VL | Skylake-X+, Ice Lake+ | Shuffle table |
+| **simd_compress** (`compress_store_u32x8`) | AVX512F + AVX512VL (x86), NEON TBL2 (ARM) | Skylake-X+, Ice Lake+, All ARM | NEON TBL on ARM, Shuffle table elsewhere |
 | **simd_compress** (`compress_store_u32x16`) | AVX512F | Skylake-X+, Ice Lake+ | Two u32x8 compresses |
-| **simd_compress** (`compress_store_u8x16`) | AVX512VBMI2 + AVX512VL | Ice Lake+, Tiger Lake+ | Gather-style writes |
+| **simd_compress** (`compress_store_u8x16`) | AVX512VBMI2 + AVX512VL (x86), NEON TBL (ARM) | Ice Lake+, Tiger Lake+, All ARM | NEON TBL on ARM, gather-style writes elsewhere |
 | **simd_gather** (`gather_u32index_u8`) | AVX512F + AVX512BW | Skylake-X+, Ice Lake+ | Scalar loop |
 | **simd_gather** (`gather_u32index_u32`) | AVX512F | Skylake-X+, Ice Lake+ | Scalar loop |
 | **Table64** | **ARM NEON TBL4** (aarch64) or AVX512BW + AVX512VBMI (x86_64) | All ARMv8+ (Apple Silicon), Ice Lake+ | Scalar lookup (x86_64 only) |
@@ -34,20 +34,27 @@ features (Ice Lake+).
 
 #### SIMD Compress Kernels (`simd_compress` module)
 
-- **`compress_store_u32x8`**: Requires **AVX512F** + **AVX512VL**
-  - Uses `VPCOMPRESSD` instruction
-  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
-  - Fallback: Shuffle-based table lookup (works on all architectures)
+- **`compress_store_u32x8`**:
+  - **Intel x86_64**: Requires **AVX512F** + **AVX512VL**, uses `VPCOMPRESSD` instruction
+  - **ARM aarch64**: Uses **NEON TBL2** with precomputed byte-level shuffle indices
+    - Eliminates 8 conditional branches from scalar fallback
+    - 256×32 byte lookup table for O(1) index computation
+  - Available on: Intel Skylake-X+, All ARMv8+ (Apple Silicon M1/M2/M3)
+  - Fallback: Shuffle-based table lookup (other architectures)
 
 - **`compress_store_u32x16`**: Requires **AVX512F**
   - Uses `VPCOMPRESSD` instruction (512-bit variant)
   - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
   - Fallback: Two `compress_store_u32x8` operations
 
-- **`compress_store_u8x16`**: Requires **AVX512VBMI2** + **AVX512VL**
-  - Uses `VPCOMPRESSB` instruction
-  - Available on: Intel Ice Lake, Tiger Lake, and later (**not available on Skylake-X**)
-  - Fallback: Gather-style direct writes
+- **`compress_store_u8x16`**:
+  - **Intel x86_64**: Requires **AVX512VBMI2** + **AVX512VL**, uses `VPCOMPRESSB` instruction
+  - **ARM aarch64**: Uses **NEON TBL** (`vqtbl1q_u8`) with precomputed shuffle indices
+    - Eliminates 16 conditional branches from scalar fallback
+    - 64KB lookup table (65536×16 bytes) for O(1) index computation
+    - Single TBL instruction performs entire 16-byte shuffle
+  - Available on: Intel Ice Lake+, All ARMv8+ (Apple Silicon M1/M2/M3)
+  - Fallback: Gather-style direct writes (other architectures)
 
 #### SIMD Gather Operations (`simd_gather` module)
 
@@ -130,11 +137,11 @@ let count = compress_store_u32x8(data, mask, &mut output);
 // Also available for u32x16 (512-bit) and u8x16
 ```
 
-| Function | AVX-512 | Fallback |
-|----------|---------|----------|
-| `compress_store_u32x8` | `VPCOMPRESSD` (AVX512VL) | Shuffle table |
-| `compress_store_u32x16` | `VPCOMPRESSD` (AVX512F) | 2× u32x8 compress |
-| `compress_store_u8x16` | `VPCOMPRESSB` (AVX512VBMI2) | Shuffle table |
+| Function | AVX-512 | ARM NEON | Other |
+|----------|---------|----------|-------|
+| `compress_store_u32x8` | `VPCOMPRESSD` (AVX512VL) | `TBL2` + byte LUT | Shuffle table |
+| `compress_store_u32x16` | `VPCOMPRESSD` (AVX512F) | 2× NEON u32x8 | 2× u32x8 compress |
+| `compress_store_u8x16` | `VPCOMPRESSB` (AVX512VBMI2) | `TBL` + byte LUT | Shuffle table |
 
 ### Shuffle/Permute Operations
 
@@ -211,10 +218,10 @@ let mask_vec: u64x8 = u64x8::from_bitmask(mask);
 // mask_vec == [0, MAX, 0, MAX, 0, MAX, 0, MAX]
 ```
 
-| Type | AVX-512 | AVX2/NEON |
-|------|---------|-----------|
-| `u64x8` | `VPBROADCASTQ` + mask | Loop |
-| `u32x8` | `VPBROADCASTD` + mask | Loop |
+| Type | AVX-512 | ARM NEON | AVX2/Other |
+|------|---------|----------|------------|
+| `u64x8` | `VPBROADCASTQ` + mask | `VCEQ` + `VMOVL` chain | Loop |
+| `u32x8` | `VPBROADCASTD` + mask | `VCEQ` + `VMOVL` chain | Loop |
 
 ### Double (`double()` method on `WideUtilsExt`)
 
@@ -280,8 +287,15 @@ Specialized lookup for tables with ≤8 unique values, using SIMD comparison and
 ## Performance Notes
 
 - **AVX-512**: Native compress instructions are ~3-5× faster than shuffle-based fallback
+- **ARM NEON compress**: ~2× faster than scalar conditional branches for typical mask densities
+  - `compress_store_u8x16`: Single `vqtbl1q_u8` replaces 16 conditional branches
+  - `compress_store_u32x8`: `vqtbl2q_u8` with precomputed byte indices replaces 8 conditional branches
+  - Bitmask expansion: Parallel `vceq`/`vmovl` chain replaces scalar loop
 - **NEON u32 shuffle**: Uses `TBL`/`TBL2` with byte-level indexing (converts u32 indices to byte offsets)
-- **Lookup tables**: 256×8×4 = 8KB for u32x8 compress indices; fits in L1 cache
+- **Lookup tables**:
+  - u32x8 compress indices: 256×8×4 = 8KB (fits in L1 cache)
+  - u32x8 byte indices for NEON: 256×32 = 8KB (fits in L1 cache)
+  - u8x16 compress indices for NEON: 65536×16 = 1MB (may cause cache pressure on hot paths)
 - **SimdSplit**: AVX-512 uses single extract instruction; fallback is zero-cost transmute
 
 ## TODO list
