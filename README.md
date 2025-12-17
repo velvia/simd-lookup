@@ -8,6 +8,105 @@ High-performance SIMD utilities for fast table lookups, compression and data pro
 - **Zero-cost abstractions**: Thin wrappers over platform intrinsics via the `wide` crate
 - **Comprehensive utilities**: Compress, shuffle, widen, split, and bitmask operations
 
+## CPU Feature Requirements
+
+This crate automatically detects and uses the best available CPU features, with fallbacks for older CPUs.
+The crate is optimized for both **ARM NEON** (aarch64) and **Intel AVX-512** (x86_64) architectures.
+
+**Note**: `Table64` is **primarily optimized for ARM NEON** using the `TBL4` instruction, which provides
+excellent performance on Apple Silicon and other ARMv8+ CPUs. On Intel x86_64, it requires newer AVX-512
+features (Ice Lake+).
+
+### Summary Table
+
+| Module/Feature | Required CPU Features | Available CPUs | Fallback |
+|----------------|----------------------|----------------|----------|
+| **simd_compress** (`compress_store_u32x8`) | AVX512F + AVX512VL | Skylake-X+, Ice Lake+ | Shuffle table |
+| **simd_compress** (`compress_store_u32x16`) | AVX512F | Skylake-X+, Ice Lake+ | Two u32x8 compresses |
+| **simd_compress** (`compress_store_u8x16`) | AVX512VBMI2 + AVX512VL | Ice Lake+, Tiger Lake+ | Gather-style writes |
+| **simd_gather** (`gather_u32index_u8`) | AVX512F + AVX512BW | Skylake-X+, Ice Lake+ | Scalar loop |
+| **simd_gather** (`gather_u32index_u32`) | AVX512F | Skylake-X+, Ice Lake+ | Scalar loop |
+| **Table64** | **ARM NEON TBL4** (aarch64) or AVX512BW + AVX512VBMI (x86_64) | All ARMv8+ (Apple Silicon), Ice Lake+ | Scalar lookup (x86_64 only) |
+| **Table2dU8xU8** | AVX512F + AVX512BW | Skylake-X+, Ice Lake+ | Scalar lookup |
+| **Cascading Lookup Kernel** | AVX512F + AVX512VL + AVX512BW + AVX512VBMI2 | Ice Lake+, Tiger Lake+ | Scalar lookup |
+
+### Detailed Requirements
+
+#### SIMD Compress Kernels (`simd_compress` module)
+
+- **`compress_store_u32x8`**: Requires **AVX512F** + **AVX512VL**
+  - Uses `VPCOMPRESSD` instruction
+  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+  - Fallback: Shuffle-based table lookup (works on all architectures)
+
+- **`compress_store_u32x16`**: Requires **AVX512F**
+  - Uses `VPCOMPRESSD` instruction (512-bit variant)
+  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+  - Fallback: Two `compress_store_u32x8` operations
+
+- **`compress_store_u8x16`**: Requires **AVX512VBMI2** + **AVX512VL**
+  - Uses `VPCOMPRESSB` instruction
+  - Available on: Intel Ice Lake, Tiger Lake, and later (**not available on Skylake-X**)
+  - Fallback: Gather-style direct writes
+
+#### SIMD Gather Operations (`simd_gather` module)
+
+- **`gather_u32index_u8`**: Requires **AVX512F** + **AVX512BW**
+  - Uses `VGATHERDPS` + `VPMOVDB` instructions
+  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+  - Fallback: Scalar loop
+
+- **`gather_u32index_u32`**: Requires **AVX512F**
+  - Uses `VGATHERDPS` instruction
+  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+  - Fallback: Scalar loop
+
+#### Small Table Lookups (`small_table` module)
+
+- **`Table64`**: **Highly optimized for ARM NEON** (primary optimization target)
+  - **ARM aarch64 (Apple Silicon, etc.)**: Uses ARM NEON `TBL4` instruction (`vqtbl4q_u8`)
+    - Native hardware support on all ARMv8+ CPUs (including Apple M1/M2/M3)
+    - Extremely efficient single-instruction 64-byte table lookup
+    - No fallback needed - full SIMD acceleration on ARM
+  - **Intel x86_64**: Requires **AVX512BW** + **AVX512VBMI**
+    - Uses `VPERMB` instruction (`_mm512_permutexvar_epi8`) for 64-byte table lookups
+    - Available on: Intel Ice Lake, Tiger Lake, and later (**not available on Skylake-X**)
+    - Fallback: Scalar lookup (works on all x86_64 CPUs)
+
+- **`Table2dU8xU8`**: Requires **AVX512F** + **AVX512BW** (via `simd_gather`)
+  - Uses `VGATHERDPS` + `VPMOVDB` for parallel lookups
+  - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+  - Fallback: Scalar lookup
+
+#### Cascading Lookup Kernels (`lookup_kernel` module)
+
+- **`SimdCascadingTableU32U8Lookup`**: Requires **AVX512F** + **AVX512VL** + **AVX512BW** + **AVX512VBMI2**
+  - Uses `compress_store_u8x16`, `compress_store_u32x16`, and `gather_u32index_u8`
+  - Provides 40-50% speedup over scalar implementations on large tables
+  - Available on: Intel Ice Lake, Tiger Lake, and later (**not available on Skylake-X**)
+  - Fallback: Scalar lookup (works on all architectures)
+
+### CPU Generation Reference
+
+- **Skylake-X (2017)**: AVX512F, AVX512VL, AVX512BW ✅ | AVX512VBMI ❌ | AVX512VBMI2 ❌
+- **Ice Lake (2019)**: AVX512F, AVX512VL, AVX512BW, AVX512VBMI, AVX512VBMI2 ✅
+- **Tiger Lake (2020)**: AVX512F, AVX512VL, AVX512BW, AVX512VBMI, AVX512VBMI2 ✅
+- **Apple Silicon (M1/M2/M3)**: ARM NEON (TBL4) ✅ - no AVX-512 equivalent needed
+
+### Checking CPU Features
+
+You can check which features your CPU supports:
+
+```bash
+# Linux
+grep flags /proc/cpuinfo | head -1
+
+# Or use Rust's feature detection
+cargo run --example check_features
+```
+
+All functions automatically detect available CPU features at runtime and use the best available implementation.
+
 ## SIMD Utilities (`wide_utils` module)
 
 This crate provides a rich set of SIMD utilities built on top of the `wide` crate, with optimized implementations for x86_64 (AVX-512/AVX2) and aarch64 (NEON).
@@ -156,7 +255,8 @@ let simd_indices = get_compress_indices_u32x8(0b10110010u8);
 ## Other Modules
 
 ### `small_table` — Small Table SIMD Lookup
-64-entry lookup table optimized for NEON `TBL4` and AVX-512 `VPERMB`. Useful for fast pattern detection and small dictionary lookups.
+64-entry lookup table **primarily optimized for ARM NEON `TBL4`** (excellent performance on Apple Silicon)
+and also supports AVX-512 `VPERMB` on Intel Ice Lake+. Useful for fast pattern detection and small dictionary lookups.
 
 ### `prefetch` — SIMD Memory Prefetch
 Cross-platform memory prefetch utilities including masked prefetch for 8 addresses at once. Supports L1/L2/L3 cache hints.

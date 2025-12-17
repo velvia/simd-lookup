@@ -5,6 +5,28 @@
 //! (`_mm512_i32gather_epi32`, `_mm512_mask_i32gather_epi32`); on other platforms,
 //! they fall back to scalar loops.
 //!
+//! # CPU Feature Requirements (Intel x86_64)
+//!
+//! ## Optimal Performance (AVX-512)
+//!
+//! - **`gather_u32index_u8` / `gather_masked_u32index_u8`**: Requires **AVX512F** + **AVX512BW**
+//!   - Uses `VGATHERDPS` (`_mm512_i32gather_epi32`) + `VPMOVDB` (`_mm512_cvtepi32_epi8`)
+//!   - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+//!   - Fallback: Scalar loop (works on all architectures)
+//!
+//! - **`gather_u32index_u32` / `gather_masked_u32index_u32`**: Requires **AVX512F**
+//!   - Uses `VGATHERDPS` (`_mm512_i32gather_epi32`)
+//!   - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+//!   - Fallback: Scalar loop (works on all architectures)
+//!
+//! ## Fallback Behavior
+//!
+//! All functions automatically fall back to scalar implementations when AVX-512
+//! features are not available. The fallback implementations work on:
+//! - x86_64 without AVX-512 (uses AVX2 gather if available, or scalar)
+//! - aarch64 (ARM NEON) - scalar fallback
+//! - All other architectures (scalar fallback)
+//!
 //! # Functions
 //!
 //! - [`gather_u32index_u8`] - Gather 16 bytes using u32 indices

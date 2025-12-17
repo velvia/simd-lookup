@@ -1,5 +1,36 @@
 //! SIMD enabled efficient small table lookups - for 64 entries or 64K entries.
 //! May be 2-D lookups as well.
+//!
+//! # CPU Feature Requirements
+//!
+//! ## Table64 (64-entry lookup table)
+//!
+//! **`Table64` is primarily optimized for ARM NEON** and provides excellent performance on Apple Silicon
+//! and other ARMv8+ CPUs. It also supports Intel AVX-512 on newer CPUs.
+//!
+//! ### ARM aarch64 (Primary Optimization Target)
+//! - **Optimal**: Uses ARM NEON `TBL4` instruction (`vqtbl4q_u8`)
+//!   - Native hardware support on all ARMv8+ CPUs (including Apple M1/M2/M3)
+//!   - Extremely efficient single-instruction 64-byte table lookup
+//!   - No fallback needed - full SIMD acceleration on ARM
+//!   - The `TBL4` instruction can perform 64-entry lookups in a single operation
+//!
+//! ### Intel x86_64
+//! - **Optimal**: Requires **AVX512BW** + **AVX512VBMI**
+//!   - Uses `VPERMB` instruction (`_mm512_permutexvar_epi8`) for 64-byte table lookups
+//!   - Available on: Intel Ice Lake, Tiger Lake, and later (not available on Skylake-X)
+//!   - Fallback: Scalar lookup (works on all x86_64 CPUs)
+//!
+//! ## Table2dU8xU8 (2D lookup table, up to 64K entries)
+//!
+//! ### Intel x86_64
+//! - **Optimal**: Requires **AVX512F** + **AVX512BW** (via `simd_gather` module)
+//!   - Uses `VGATHERDPS` + `VPMOVDB` for parallel lookups
+//!   - Available on: Intel Skylake-X (Xeon), Ice Lake, Tiger Lake, and later
+//!   - Fallback: Scalar lookup (works on all architectures)
+//!
+//! ### ARM aarch64
+//! - Uses scalar fallback (NEON gather is not significantly faster than scalar for this use case)
 
 use crate::simd_gather::gather_u32index_u8;
 use crate::wide_utils::WideUtilsExt;

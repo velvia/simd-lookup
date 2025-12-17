@@ -10,6 +10,31 @@
 //! These operate by leveraging constant-sized array reads from a slice with SIMD operations on looked up values,
 //! especially fast for multiple table lookups and combinations thereof.
 //! It turns out these don't significantly improve on a series of scalar lookups.
+//!
+//! # CPU Feature Requirements (Intel x86_64)
+//!
+//! ## Cascading Lookup Kernel (`SimdCascadingTableU32U8Lookup`)
+//!
+//! The cascading kernel is heavily optimized for AVX-512 and provides significant performance
+//! improvements (40-50% speedup) over scalar implementations on large tables.
+//!
+//! **Required CPU features:**
+//! - **AVX512F** + **AVX512VL** + **AVX512VBMI2** (for `compress_store_u8x16`)
+//! - **AVX512F** (for `compress_store_u32x16`)
+//! - **AVX512F** + **AVX512BW** (for `gather_u32index_u8` via `simd_gather` module)
+//!
+//! **Summary**: Requires **AVX512F**, **AVX512VL**, **AVX512BW**, and **AVX512VBMI2**
+//!
+//! **Available on**: Intel Ice Lake, Tiger Lake, and later (not available on Skylake-X)
+//!
+//! **Fallback**: All kernels fall back to scalar implementations when AVX-512 features are
+//! not available. The scalar fallback works on all architectures but is significantly slower.
+//!
+//! ## Other Kernels
+//!
+//! - **`SimdSingleTableU32U8Lookup`**: Uses scalar lookups (works on all architectures)
+//! - **`SimdDualTableU32U8Lookup`**: Uses scalar lookups (works on all architectures)
+//! - **`PipelinedSingleTableU32U8Lookup`**: Uses scalar lookups with software prefetching
 
 use wide::{u8x16, u32x16};
 
