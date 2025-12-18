@@ -45,7 +45,6 @@
 pub mod bulk_vec_extender;
 pub mod eight_value_lookup;
 pub mod entropy_map_lookup;
-pub mod lookup;
 pub mod lookup_kernel;
 pub mod prefetch;
 pub mod simd_compress;
@@ -56,7 +55,6 @@ pub mod wide_utils;
 // Re-export the main types for convenience
 pub use eight_value_lookup::EightValueLookup;
 pub use entropy_map_lookup::{EntropyMapBitpackedLookup, EntropyMapLookup};
-pub use lookup::{HashLookup, Lookup, ScalarLookup, SimdLookup, U8x8};
 pub use lookup_kernel::{
     PipelinedSingleTableU32U8Lookup, SimdCascadingTableU32U8Lookup, SimdDualTableWithHashLookup,
 };
