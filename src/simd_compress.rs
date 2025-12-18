@@ -91,17 +91,18 @@ use crate::wide_utils::{
 /// # Arguments
 /// * `data` - Source vector of 8 u32 values
 /// * `mask` - 8-bit mask where bit i selects element i
-/// * `dest` - Destination slice (must have at least `mask.count_ones()` elements)
+/// * `dest` - Destination slice (**must have room for 8 elements**)
 ///
 /// # Returns
 /// Number of elements written (equal to `mask.count_ones()`)
 ///
 /// # Panics
-/// Panics if `dest` is smaller than the number of set bits in mask.
+/// Panics if `dest.len() < 8`. The destination must have room for the full
+/// uncompressed vector since the mask is not known at compile time.
 #[inline]
 pub fn compress_store_u32x8(data: u32x8, mask: u8, dest: &mut [u32]) -> usize {
     let count = mask.count_ones() as usize;
-    assert!(dest.len() >= count, "destination buffer too small");
+    assert!(dest.len() >= 8, "destination buffer must have room for 8 elements");
 
     #[cfg(target_arch = "x86_64")]
     {
@@ -233,11 +234,12 @@ static COMPRESS_BYTE_IDX_U32X8: [(u8x16, u8x16); 256] = {
 };
 
 /// NEON-optimized compress store for u32x8 using TBL instruction.
-/// Uses precomputed byte-level shuffle indices to avoid runtime index conversion.
+/// Writes full 32 bytes directly; only first `count` elements are valid.
+/// Caller must ensure dest has room for 8 elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 #[target_feature(enable = "neon")]
-unsafe fn compress_store_u32x8_neon(data: u32x8, mask: u8, count: usize, dest: &mut [u32]) {
+unsafe fn compress_store_u32x8_neon(data: u32x8, mask: u8, _count: usize, dest: &mut [u32]) {
     unsafe {
         let (idx_lo, idx_hi) = COMPRESS_BYTE_IDX_U32X8[mask as usize];
 
@@ -245,23 +247,14 @@ unsafe fn compress_store_u32x8_neon(data: u32x8, mask: u8, count: usize, dest: &
         let (data_lo, data_hi): (u8x16, u8x16) = std::mem::transmute(data);
         let tables = uint8x16x2_t(std::mem::transmute(data_lo), std::mem::transmute(data_hi));
 
-        // TBL2 lookup for low half
+        // TBL2 shuffle both halves
         let result_lo = vqtbl2q_u8(tables, std::mem::transmute(idx_lo));
+        let result_hi = vqtbl2q_u8(tables, std::mem::transmute(idx_hi));
 
-        // Transmute result directly to [u32; 4]
-        let result_bytes: [u32; 4] = std::mem::transmute(result_lo);
-
-        // Copy only the valid elements
-        let copy_count_lo = count.min(4);
-        dest[..copy_count_lo].copy_from_slice(&result_bytes[..copy_count_lo]);
-
-        // If more than 4 elements, process the high half
-        if count > 4 {
-            let result_hi = vqtbl2q_u8(tables, std::mem::transmute(idx_hi));
-            let result_bytes_hi: [u32; 4] = std::mem::transmute(result_hi);
-            let copy_count_hi = count - 4;
-            dest[4..4 + copy_count_hi].copy_from_slice(&result_bytes_hi[..copy_count_hi]);
-        }
+        // Store full 32 bytes directly
+        let dest_ptr = dest.as_mut_ptr() as *mut u8;
+        vst1q_u8(dest_ptr, result_lo);
+        vst1q_u8(dest_ptr.add(16), result_hi);
     }
 }
 
@@ -315,17 +308,18 @@ fn compress_store_u32x8_gather(data: u32x8, mask: u8, dest: &mut [u32]) {
 /// # Arguments
 /// * `data` - Source vector of 16 u32 values
 /// * `mask` - 16-bit mask where bit i selects element i
-/// * `dest` - Destination slice (must have at least `mask.count_ones()` elements)
+/// * `dest` - Destination slice (**must have room for 16 elements**)
 ///
 /// # Returns
 /// Number of elements written (equal to `mask.count_ones()`)
 ///
 /// # Panics
-/// Panics if `dest` is smaller than the number of set bits in mask.
+/// Panics if `dest.len() < 16`. The destination must have room for the full
+/// uncompressed vector since the mask is not known at compile time.
 #[inline]
 pub fn compress_store_u32x16(data: u32x16, mask: u16, dest: &mut [u32]) -> usize {
     let count = mask.count_ones() as usize;
-    assert!(dest.len() >= count, "destination buffer too small");
+    assert!(dest.len() >= 16, "destination buffer must have room for 16 elements");
 
     #[cfg(target_arch = "x86_64")]
     {
@@ -434,17 +428,18 @@ fn compress_u32x16_fallback_to_vec(data: u32x16, mask: u16) -> u32x16 {
 /// # Arguments
 /// * `data` - Source vector of 16 u8 values
 /// * `mask` - 16-bit mask where bit i selects element i
-/// * `dest` - Destination slice (must have at least `mask.count_ones()` elements)
+/// * `dest` - Destination slice (**must have room for 16 elements**)
 ///
 /// # Returns
 /// Number of elements written (equal to `mask.count_ones()`)
 ///
 /// # Panics
-/// Panics if `dest` is smaller than the number of set bits in mask.
+/// Panics if `dest.len() < 16`. The destination must have room for the full
+/// uncompressed vector since the mask is not known at compile time.
 #[inline]
 pub fn compress_store_u8x16(data: u8x16, mask: u16, dest: &mut [u8]) -> usize {
     let count = mask.count_ones() as usize;
-    assert!(dest.len() >= count, "destination buffer too small");
+    assert!(dest.len() >= 16, "destination buffer must have room for 16 elements");
 
     #[cfg(target_arch = "x86_64")]
     {
@@ -548,11 +543,12 @@ static COMPRESS_BYTE_IDX_U8X16: [u8x16; 65536] = {
 };
 
 /// NEON-optimized compress store for u8x16 using TBL instruction.
-/// Eliminates 16 conditional branches by using precomputed shuffle indices.
+/// Writes full 16 bytes directly; only first `count` elements are valid.
+/// Caller must ensure dest has room for 16 elements.
 #[cfg(target_arch = "aarch64")]
 #[inline]
 #[target_feature(enable = "neon")]
-unsafe fn compress_store_u8x16_neon(data: u8x16, mask: u16, count: usize, dest: &mut [u8]) {
+unsafe fn compress_store_u8x16_neon(data: u8x16, mask: u16, _count: usize, dest: &mut [u8]) {
     unsafe {
         // Zero-cost transmutes - no load instructions needed
         let data_vec: uint8x16_t = std::mem::transmute(data);
@@ -561,9 +557,8 @@ unsafe fn compress_store_u8x16_neon(data: u8x16, mask: u16, count: usize, dest: 
         // Single TBL instruction shuffles all 16 bytes
         let result = vqtbl1q_u8(data_vec, idx_vec);
 
-        // Transmute register directly to array (no store needed)
-        let result_arr: [u8; 16] = std::mem::transmute(result);
-        dest[..count].copy_from_slice(&result_arr[..count]);
+        // Store full 16 bytes directly
+        vst1q_u8(dest.as_mut_ptr(), result);
     }
 }
 
@@ -907,5 +902,39 @@ mod tests {
         assert_eq!(count, 2);
         assert_eq!(output[0], 100);
         assert_eq!(output[1], 200);
+    }
+
+    // =========================================================================
+    // Buffer size requirement tests
+    // =========================================================================
+
+    #[test]
+    #[should_panic(expected = "destination buffer must have room for 8 elements")]
+    fn test_compress_u32x8_panics_on_small_buffer() {
+        let data = u32x8::from([10, 20, 30, 40, 50, 60, 70, 80]);
+        let mask = 0b10110010u8;
+        let mut output = [0u32; 4]; // Too small!
+        compress_store_u32x8(data, mask, &mut output);
+    }
+
+    #[test]
+    #[should_panic(expected = "destination buffer must have room for 16 elements")]
+    fn test_compress_u8x16_panics_on_small_buffer() {
+        let data = u8x16::from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let mask = 0b1000000100000101u16;
+        let mut output = [0u8; 8]; // Too small!
+        compress_store_u8x16(data, mask, &mut output);
+    }
+
+    #[test]
+    #[should_panic(expected = "destination buffer must have room for 16 elements")]
+    fn test_compress_u32x16_panics_on_small_buffer() {
+        let data = u32x16::from([
+            10, 20, 30, 40, 50, 60, 70, 80,
+            90, 100, 110, 120, 130, 140, 150, 160
+        ]);
+        let mask = 0b1000000110110010u16;
+        let mut output = [0u32; 8]; // Too small!
+        compress_store_u32x16(data, mask, &mut output);
     }
 }
