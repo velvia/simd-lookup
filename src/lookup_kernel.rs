@@ -235,9 +235,12 @@ impl<'a> SimdSingleTableU32U8Lookup<'a> {
         let zeroes = u8x16::splat(0);
 
         // Use BulkVecExtender for bulk mutable slices - enables VCOMPRESS and efficient writes
-        let mut result_guard = nonzero_results.bulk_extend_guard(values.len());
+        // Ensure at least 16 elements for compress_store functions
+        // Allocate extra space to ensure remainder always has 16 elements available
+        let min_len = (values.len() + 16).max(16);
+        let mut result_guard = nonzero_results.bulk_extend_guard(min_len);
         let result_slice = result_guard.as_mut_slice();
-        let mut indices_guard = indices.bulk_extend_guard(values.len());
+        let mut indices_guard = indices.bulk_extend_guard(min_len);
         let indices_slice = indices_guard.as_mut_slice();
         let mut num_written = 0;
 
@@ -245,9 +248,16 @@ impl<'a> SimdSingleTableU32U8Lookup<'a> {
             // Check which values are nonzero and convert to bitmask
             // simd_eq returns 0xFF where equal to zero, so invert to get nonzero mask
             let eq_mask = lookedup_values.simd_eq(zeroes).to_bitmask();
-            let nonzero_mask = !eq_mask as u16;
+            let mut nonzero_mask = !eq_mask as u16;
+
+            // For remainder chunks (< 16 elements), mask out invalid elements
+            if num_bytes < 16 {
+                nonzero_mask &= (1u16 << num_bytes) - 1;
+            }
 
             // Compress nonzero values into result_slice
+            // We always have at least 16 elements available because we allocated values.len().max(16)
+            // and process inputs sequentially (each chunk produces at most 16 outputs)
             let written = compress_store_u8x16(lookedup_values, nonzero_mask, &mut result_slice[num_written..]);
             let _ = compress_store_u32x16(indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
             num_written += written;
@@ -798,9 +808,12 @@ impl<'a> SimdCascadingTableU32U8Lookup<'a> {
         F: Fn(u8x16, u8x16) -> u8x16,
     {
         // Use BulkVecExtender for bulk mutable slices - enables VCOMPRESS and efficient writes
-        let mut result_guard = out_results.bulk_extend_guard(in_nonzero_results.len());
+        // Ensure at least 16 elements for compress_store functions
+        // Allocate extra space to ensure remainder always has 16 elements available
+        let min_len = (in_nonzero_results.len() + 16).max(16);
+        let mut result_guard = out_results.bulk_extend_guard(min_len);
         let result_slice = result_guard.as_mut_slice();
-        let mut indices_guard = out_indices.bulk_extend_guard(in_indices.len());
+        let mut indices_guard = out_indices.bulk_extend_guard(min_len);
         let indices_slice = indices_guard.as_mut_slice();
         let mut num_written = 0;
 
@@ -831,6 +844,8 @@ impl<'a> SimdCascadingTableU32U8Lookup<'a> {
             let eq_mask = mixed_results.simd_eq(zeroes).to_bitmask();
             let nonzero_mask = !eq_mask as u16;
 
+            // Compress nonzero values into result_slice
+            // We always have at least 16 elements available because we allocated (len + 16)
             let num_nonzeroes = compress_store_u8x16(mixed_results, nonzero_mask, &mut result_slice[num_written..]);
             let _ = compress_store_u32x16(in_indices_simd, nonzero_mask, &mut indices_slice[num_written..]);
             num_written += num_nonzeroes;
@@ -1090,6 +1105,69 @@ mod tests {
         assert_eq!(result[5], 10);
         assert_eq!(result[6], 20);
         assert_eq!(result[7], 30);
+    }
+
+    #[test]
+    fn test_single_table_lookup_compress_into_nonzeroes_small_input() {
+        // Test lookup_compress_into_nonzeroes with < 16 elements
+        let lookup_table: Vec<u8> = (0..256).map(|i| if i % 2 == 0 { i as u8 } else { 0 }).collect();
+        let lookup = SimdSingleTableU32U8Lookup::new(&lookup_table);
+
+        // Test with 5 values (less than 16)
+        let values = vec![0u32, 1, 2, 3, 4];
+        let mut nonzero_results: Vec<u8> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+
+        lookup.lookup_compress_into_nonzeroes(&values, &mut nonzero_results, &mut indices, 0);
+
+        // Expected: indices 2, 4 are nonzero (lookup_table[0]=0, [1]=0, [2]=2, [3]=0, [4]=4)
+        assert_eq!(nonzero_results.len(), 2);
+        assert_eq!(nonzero_results, vec![2, 4]);
+        assert_eq!(indices, vec![2, 4]);
+    }
+
+    #[test]
+    fn test_cascading_lookup_small_input() {
+        // Test cascading_lookup with < 16 elements in input
+        let lookup_table1: Vec<u8> = (0..256).map(|i| i as u8).collect();
+        let lookup_table2: Vec<u8> = (0..256).map(|i| i as u8).collect();
+
+        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
+        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
+
+        // Test with 3 values (less than 16)
+        let values1: Vec<u32> = vec![1, 2, 3];
+        let values2: Vec<u32> = vec![10, 20, 30];
+
+        let mut nonzero_results: Vec<u8> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        single_table.lookup_compress_into_nonzeroes(&values1, &mut nonzero_results, &mut indices, 0);
+
+        // All 3 values are nonzero
+        assert_eq!(nonzero_results.len(), 3);
+        assert_eq!(indices, vec![0, 1, 2]);
+
+        // Cascading lookup
+        let mut out_results: Vec<u8> = Vec::new();
+        let mut out_indices: Vec<u32> = Vec::new();
+
+        cascading_table.cascading_lookup(
+            &values2,
+            &nonzero_results,
+            &indices,
+            |v1, v2| v1 & v2,
+            &mut out_results,
+            &mut out_indices,
+        );
+
+        // Expected mixed results:
+        //   v1=1, v2=10, mixed=1&10=0
+        //   v1=2, v2=20, mixed=2&20=0
+        //   v1=3, v2=30, mixed=3&30=2
+        // Only index 2 has nonzero result
+        assert_eq!(out_results.len(), 1);
+        assert_eq!(out_results[0], 2);  // 3 & 30 = 2
+        assert_eq!(out_indices[0], 2);
     }
 
     #[test]
