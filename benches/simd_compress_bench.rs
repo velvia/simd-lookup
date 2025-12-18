@@ -59,10 +59,10 @@ fn bench_compress_store_u32x8(c: &mut Criterion) {
 
     for density in densities.iter() {
         let mask = generate_mask_u8(*density);
-        let count = mask.count_ones() as usize;
         let mut output = vec![0u32; 8];
 
-        group.throughput(Throughput::Elements(count as u64));
+        // Throughput is based on input elements processed (8 for u32x8)
+        group.throughput(Throughput::Elements(8));
         group.bench_with_input(
             BenchmarkId::new("density", format!("{:.0}%", density * 100.0)),
             &mask,
@@ -85,10 +85,10 @@ fn bench_compress_store_u8x16(c: &mut Criterion) {
 
     for density in densities.iter() {
         let mask = generate_mask_u16(*density);
-        let count = mask.count_ones() as usize;
         let mut output = vec![0u8; 16];
 
-        group.throughput(Throughput::Elements(count as u64));
+        // Throughput is based on input elements processed (16 for u8x16)
+        group.throughput(Throughput::Elements(16));
         group.bench_with_input(
             BenchmarkId::new("density", format!("{:.0}%", density * 100.0)),
             &mask,
@@ -111,10 +111,10 @@ fn bench_compress_store_u32x16(c: &mut Criterion) {
 
     for density in densities.iter() {
         let mask = generate_mask_u16(*density);
-        let count = mask.count_ones() as usize;
         let mut output = vec![0u32; 16];
 
-        group.throughput(Throughput::Elements(count as u64));
+        // Throughput is based on input elements processed (16 for u32x16)
+        group.throughput(Throughput::Elements(16));
         group.bench_with_input(
             BenchmarkId::new("density", format!("{:.0}%", density * 100.0)),
             &mask,
@@ -146,7 +146,8 @@ fn bench_compress_batch_u32x8(c: &mut Criterion) {
         masks.push(generate_mask_u8(0.5)); // 50% average density
     }
 
-    group.throughput(Throughput::Elements(batch_size as u64));
+    // Throughput is batch_size * elements per vector (1000 * 8 for u32x8)
+    group.throughput(Throughput::Elements((batch_size * 8) as u64));
     group.bench_function("batch_1000", |b| {
         b.iter(|| {
             for i in 0..batch_size {
@@ -176,7 +177,8 @@ fn bench_compress_batch_u8x16(c: &mut Criterion) {
         masks.push(generate_mask_u16(0.5)); // 50% average density
     }
 
-    group.throughput(Throughput::Elements(batch_size as u64));
+    // Throughput is batch_size * elements per vector (1000 * 16 for u8x16)
+    group.throughput(Throughput::Elements((batch_size * 16) as u64));
     group.bench_function("batch_1000", |b| {
         b.iter(|| {
             for i in 0..batch_size {

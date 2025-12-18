@@ -66,28 +66,35 @@ use crate::{
     bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender}, compress_store_u8x16, compress_store_u32x16, gather_u32index_u32, gather_u32index_u8, prefetch::{L3, prefetch_eight_offsets}
 };
 
+/// Safe lookup helper: returns the value at the given offset, or 0 if out of bounds
+#[inline(always)]
+fn safe_lookup(lookup_table: &[u8], offset: u32) -> u8 {
+    lookup_table.get(offset as usize).copied().unwrap_or_default()
+}
+
 /// Lookup values from lookup table using u32 offsets
 /// Returns the looked up u8 values as a [u8; 16] array
 /// This centralizes the lookup logic and avoids code duplication
+/// Out-of-bounds offsets return 0 instead of panicking
 #[inline]
 fn lookup_from_offsets(lookup_table: &[u8], offsets: &[u32; 16]) -> [u8; 16] {
     [
-        lookup_table[offsets[0] as usize],
-        lookup_table[offsets[1] as usize],
-        lookup_table[offsets[2] as usize],
-        lookup_table[offsets[3] as usize],
-        lookup_table[offsets[4] as usize],
-        lookup_table[offsets[5] as usize],
-        lookup_table[offsets[6] as usize],
-        lookup_table[offsets[7] as usize],
-        lookup_table[offsets[8] as usize],
-        lookup_table[offsets[9] as usize],
-        lookup_table[offsets[10] as usize],
-        lookup_table[offsets[11] as usize],
-        lookup_table[offsets[12] as usize],
-        lookup_table[offsets[13] as usize],
-        lookup_table[offsets[14] as usize],
-        lookup_table[offsets[15] as usize],
+        safe_lookup(lookup_table, offsets[0]),
+        safe_lookup(lookup_table, offsets[1]),
+        safe_lookup(lookup_table, offsets[2]),
+        safe_lookup(lookup_table, offsets[3]),
+        safe_lookup(lookup_table, offsets[4]),
+        safe_lookup(lookup_table, offsets[5]),
+        safe_lookup(lookup_table, offsets[6]),
+        safe_lookup(lookup_table, offsets[7]),
+        safe_lookup(lookup_table, offsets[8]),
+        safe_lookup(lookup_table, offsets[9]),
+        safe_lookup(lookup_table, offsets[10]),
+        safe_lookup(lookup_table, offsets[11]),
+        safe_lookup(lookup_table, offsets[12]),
+        safe_lookup(lookup_table, offsets[13]),
+        safe_lookup(lookup_table, offsets[14]),
+        safe_lookup(lookup_table, offsets[15]),
     ]
 }
 
