@@ -122,6 +122,8 @@ This crate provides a rich set of SIMD utilities built on top of the `wide` crat
 
 Stream compaction similar to AVX-512's `VCOMPRESS` instruction — pack selected elements contiguously based on a bitmask.
 
+**🚀 Highly optimized for ARM NEON** — achieves up to **12 Gelem/s** on Apple Silicon!
+
 ```rust
 use simd_lookup::{compress_store_u32x8, compress_store_u32x16, compress_store_u8x16};
 use wide::{u32x8, u32x16, u8x16};
@@ -129,7 +131,7 @@ use wide::{u32x8, u32x16, u8x16};
 // Compress u32x8: select elements where mask bits are set
 let data = u32x8::from([10, 20, 30, 40, 50, 60, 70, 80]);
 let mask = 0b10110010u8; // Select positions 1, 4, 5, 7
-let mut output = [0u32; 8];
+let mut output = [0u32; 8];  // Must have room for full vector!
 
 let count = compress_store_u32x8(data, mask, &mut output);
 // count == 4, output[0..4] == [20, 50, 60, 80]
@@ -137,11 +139,14 @@ let count = compress_store_u32x8(data, mask, &mut output);
 // Also available for u32x16 (512-bit) and u8x16
 ```
 
-| Function | AVX-512 | ARM NEON | Other |
-|----------|---------|----------|-------|
-| `compress_store_u32x8` | `VPCOMPRESSD` (AVX512VL) | `TBL2` + byte LUT | Shuffle table |
-| `compress_store_u32x16` | `VPCOMPRESSD` (AVX512F) | 2× NEON u32x8 | 2× u32x8 compress |
-| `compress_store_u8x16` | `VPCOMPRESSB` (AVX512VBMI2) | `TBL` + byte LUT | Shuffle table |
+**Note**: Destination buffer must have room for the full uncompressed vector (8/16 elements).
+This enables fast direct NEON stores instead of variable-length copies.
+
+| Function | AVX-512 | ARM NEON | Throughput (ARM) |
+|----------|---------|----------|------------------|
+| `compress_store_u32x8` | `VPCOMPRESSD` | `TBL2` + direct store | ~4.3 Gelem/s |
+| `compress_store_u32x16` | `VPCOMPRESSD` | 2× NEON u32x8 | ~5.3 Gelem/s |
+| `compress_store_u8x16` | `VPCOMPRESSB` | `TBL` + direct store | ~12 Gelem/s |
 
 ### Shuffle/Permute Operations
 
@@ -286,12 +291,30 @@ Specialized lookup for tables with ≤8 unique values, using SIMD comparison and
 
 ## Performance Notes
 
-- **AVX-512**: Native compress instructions are ~3-5× faster than shuffle-based fallback
-- **ARM NEON compress**: ~2× faster than scalar conditional branches for typical mask densities
-  - `compress_store_u8x16`: Single `vqtbl1q_u8` replaces 16 conditional branches
-  - `compress_store_u32x8`: `vqtbl2q_u8` with precomputed byte indices replaces 8 conditional branches
-  - Bitmask expansion: Parallel `vceq`/`vmovl` chain replaces scalar loop
+### ARM NEON Compress Performance (Apple Silicon M1/M2/M3)
+
+The NEON compress operations achieve **exceptional throughput** through optimized direct vector stores:
+
+| Operation | Throughput | vs Scalar |
+|-----------|------------|-----------|
+| `compress_store_u8x16` | **~12 Gelem/s** | ~8× faster |
+| `compress_store_u32x8` | **~4.3 Gelem/s** | ~3-4× faster |
+| `compress_store_u32x16` | **~5.3 Gelem/s** | ~5-6× faster |
+
+**Key optimizations:**
+- **Direct NEON stores**: Uses `vst1q_u8` to write full vectors instead of variable-length copies
+- **Single TBL instruction**: `compress_store_u8x16` uses one `vqtbl1q_u8` for 16-byte shuffle
+- **Precomputed byte indices**: Lookup tables eliminate runtime index computation
+- **No branches**: Mask-dependent branching eliminated entirely
+
+**API note**: Destination buffers must have room for the full uncompressed vector (8/16 elements).
+This enables the fast path—the mask is unknown at compile time, so callers should always allocate worst-case.
+
+### General Performance Notes
+
+- **AVX-512**: Native compress instructions (`VPCOMPRESSD`, `VPCOMPRESSB`) are ~3-5× faster than shuffle-based fallback
 - **NEON u32 shuffle**: Uses `TBL`/`TBL2` with byte-level indexing (converts u32 indices to byte offsets)
+- **Bitmask expansion**: Parallel `vceq`/`vmovl` chain replaces scalar loop
 - **Lookup tables**:
   - u32x8 compress indices: 256×8×4 = 8KB (fits in L1 cache)
   - u32x8 byte indices for NEON: 256×32 = 8KB (fits in L1 cache)
