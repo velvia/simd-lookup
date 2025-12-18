@@ -273,13 +273,6 @@ and also supports AVX-512 `VPERMB` on Intel Ice Lake+. Useful for fast pattern d
 ### `prefetch` — SIMD Memory Prefetch
 Cross-platform memory prefetch utilities including masked prefetch for 8 addresses at once. Supports L1/L2/L3 cache hints.
 
-### `lookup_kernel` — High-Performance Lookup Kernels
-Production-ready SIMD lookup kernels for dictionary/table lookups:
-- `PipelinedSingleTableU32U8Lookup` — Pipelined single-table lookup with software prefetching
-- `SimdDualTableU32U8Lookup` — Dual-table lookup for join-like operations
-- `SimdCascadingTableU32U8Lookup` — Cascading multi-table lookup with VGATHER/VCOMPRESS
-- `SimdDualTableWithHashLookup` — Dual table with hash fallback for unknown keys
-
 ### `bulk_vec_extender` — Efficient Vec Extension
 Utilities for efficiently extending `Vec` with SIMD-produced results, minimizing bounds checks and reallocations.
 

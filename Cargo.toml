@@ -1,7 +1,32 @@
 [package]
 name = "simd-lookup"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+rust-version = "1.75"  # Required for stable SIMD features
+
+# Crate metadata for crates.io
+description = "High-performance SIMD utilities for fast table lookups, compression and data processing"
+license = "Apache-2.0"
+repository = "https://github.com/velvia/simd-lookup"
+documentation = "https://docs.rs/simd-lookup"
+homepage = "https://github.com/velvia/simd-lookup"
+readme = "README.md"
+keywords = ["simd", "lookup", "compress", "neon", "avx512"]
+categories = ["algorithms", "data-structures", "no-std"]
+authors = ["Evan Chan <velvia@gmail.com>"]
+
+# Exclude non-essential files from the published crate
+exclude = [
+    "benches/",
+    "scripts/",
+    "target/",
+    "Dockerfile.perf",
+    "BENCHMARK_ANALYSIS.md",
+    "BITPACKING_ANALYSIS.md",
+    "CACHE_PROFILING.md",
+    "SIMD_OPTIMIZATION_GUIDE.md",
+    ".github/",
+]
 
 [dependencies]
 wide = "0.8"

@@ -78,9 +78,12 @@ use std::arch::is_x86_feature_detected;
 use std::arch::aarch64::*;
 
 use crate::wide_utils::{
-    SimdSplit, WideUtilsExt, get_compress_indices_u32x8,
+    SimdSplit, WideUtilsExt,
     SHUFFLE_COMPRESS_IDX_U8_HI, SHUFFLE_COMPRESS_IDX_U8_LO,
 };
+
+#[cfg(not(target_arch = "aarch64"))]
+use crate::wide_utils::get_compress_indices_u32x8;
 
 // =============================================================================
 // u32x8 Compress Operations
