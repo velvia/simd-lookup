@@ -78,13 +78,9 @@ use std::arch::is_x86_feature_detected;
 use std::arch::aarch64::*;
 
 use crate::wide_utils::{
-    SimdSplit, WideUtilsExt,
+    SimdSplit, WideUtilsExt, get_compress_indices_u32x8,
     SHUFFLE_COMPRESS_IDX_U8_HI, SHUFFLE_COMPRESS_IDX_U8_LO,
 };
-
-// Import get_compress_indices_u32x8 only for non-ARM, non-x86 fallback
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-use crate::wide_utils::get_compress_indices_u32x8;
 
 // =============================================================================
 // u32x8 Compress Operations
@@ -113,6 +109,9 @@ pub fn compress_store_u32x8(data: u32x8, mask: u8, dest: &mut [u32]) -> usize {
             unsafe { compress_store_u32x8_avx512(data, mask, dest) };
             return count;
         }
+        // Fallback for x86-64 without AVX-512
+        compress_store_u32x8_gather(data, mask, dest);
+        return count;
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -122,7 +121,7 @@ pub fn compress_store_u32x8(data: u32x8, mask: u8, dest: &mut [u32]) -> usize {
         return count;
     }
 
-    // Fallback for other architectures: gather-style direct write
+    // This should never be reached - all architectures have been handled above
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         compress_store_u32x8_gather(data, mask, dest);
@@ -142,6 +141,10 @@ pub fn compress_u32x8(data: u32x8, mask: u8) -> (u32x8, usize) {
             let result = unsafe { compress_u32x8_avx512(data, mask) };
             return (result, count);
         }
+        // Fallback for x86-64 without AVX-512
+        let indices = get_compress_indices_u32x8(mask);
+        let result = data.shuffle(indices);
+        return (result, count);
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -176,7 +179,7 @@ unsafe fn compress_store_u32x8_avx512(data: u32x8, mask: u8, dest: &mut [u32]) {
 unsafe fn compress_u32x8_avx512(data: u32x8, mask: u8) -> u32x8 {
     unsafe {
         let raw = std::mem::transmute::<u32x8, __m256i>(data);
-        let compressed = _mm512_maskz_compress_epi32(mask, raw);
+        let compressed = _mm256_maskz_compress_epi32(mask, raw);
         std::mem::transmute::<__m256i, u32x8>(compressed)
     }
 }
@@ -287,8 +290,8 @@ unsafe fn compress_u32x8_neon_vec(data: u32x8, mask: u8) -> u32x8 {
 }
 
 /// Gather-style compress for u32x8 - direct indexed writes to destination.
-/// Used as fallback on non-ARM, non-x86 architectures.
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+/// Used as fallback on x86-64 without AVX-512 and other non-ARM architectures.
+#[cfg(not(target_arch = "aarch64"))]
 #[inline]
 fn compress_store_u32x8_gather(data: u32x8, mask: u8, dest: &mut [u32]) {
     let arr = data.to_array();
@@ -450,6 +453,9 @@ pub fn compress_store_u8x16(data: u8x16, mask: u16, dest: &mut [u8]) -> usize {
             unsafe { compress_store_u8x16_avx512(data, mask, dest) };
             return count;
         }
+        // Fallback for x86-64 without AVX-512VBMI2
+        compress_store_u8x16_gather(data, mask, dest);
+        return count;
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -459,7 +465,7 @@ pub fn compress_store_u8x16(data: u8x16, mask: u16, dest: &mut [u8]) -> usize {
         return count;
     }
 
-    // Fallback for other architectures: gather-style direct write
+    // This should never be reached - all architectures have been handled above
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     {
         compress_store_u8x16_gather(data, mask, dest);
@@ -562,8 +568,8 @@ unsafe fn compress_store_u8x16_neon(data: u8x16, mask: u16, count: usize, dest: 
 }
 
 /// Gather-style compress for u8x16 - direct indexed writes to destination.
-/// Used as fallback on non-ARM, non-x86 architectures.
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+/// Used as fallback on x86-64 without AVX-512VBMI2 and other non-ARM architectures.
+#[cfg(not(target_arch = "aarch64"))]
 #[inline]
 fn compress_store_u8x16_gather(data: u8x16, mask: u16, dest: &mut [u8]) {
     let arr = data.to_array();
