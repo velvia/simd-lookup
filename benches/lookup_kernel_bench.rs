@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 use simd_lookup::bulk_vec_extender::{BulkVecExtender, SliceU8SIMDExtender};
 // use simd_lookup::entropy_map_lookup::EntropyMapLookup;
 use simd_lookup::lookup_kernel::{
-    SimdCascadingTableU32U8Lookup, SimdDualTableU32U8Lookup, SimdDualTableU32U8LookupV2,
+    SimdDualTableU32U8Lookup, SimdDualTableU32U8LookupV2,
     SimdDualTableWithHashLookup, SimdSingleTableU32U8Lookup,
 };
 use simd_lookup::{PipelinedSingleTableU32U8Lookup, compress_store_u8x16, compress_store_u32x16};
@@ -546,98 +546,6 @@ fn bench_dual_table_with_hash(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark SimdCascadingTableU32U8Lookup with varying second lookup table sizes
-/// Uses the same parameters as DualTableV2 for comparison
-/// This benchmark uses the cascading approach:
-/// 1. First lookup using SimdSingleTableU32U8Lookup::lookup_compress_into_nonzeroes
-/// 2. Then cascading lookup using SimdCascadingTableU32U8Lookup::cascading_lookup
-fn bench_cascading_table_lookup(c: &mut Criterion) {
-    let table1_size = 15_000_000;
-    let density = 20.0; // 20% density
-    let chunk_size = 5000;
-
-    // Create table 1 (fixed at 15M)
-    println!(
-        "Creating lookup table 1: {} entries, {}% density",
-        table1_size, density
-    );
-    let entries1 = create_sparse_entries_for_kernel(table1_size, density);
-    let lookup_table1 = simd_lookup::lookup::create_scalar_lookup_table(&entries1);
-
-    // Create 1 million test values for table 1
-    let num_values = 1_000_000;
-    let test_values1 = create_test_values(num_values, table1_size);
-
-    let mut group = c.benchmark_group("cascading_table_table2_size");
-    group.throughput(Throughput::Elements(num_values as u64));
-
-    // Vary second lookup table size: 100k, 500k, 4M, 15M
-    for table2_size in [100_000, 500_000, 4_000_000, 15_000_000] {
-        let size_label = match table2_size {
-            100_000 => "100k",
-            500_000 => "500k",
-            4_000_000 => "4M",
-            15_000_000 => "15M",
-            _ => "unknown",
-        };
-
-        println!("Creating lookup table 2: {} entries", table2_size);
-        let entries2 = create_sparse_entries_for_kernel(table2_size, density);
-        let lookup_table2 = simd_lookup::lookup::create_scalar_lookup_table(&entries2);
-
-        // Create the kernels
-        let single_table = SimdSingleTableU32U8Lookup::new(&lookup_table1);
-        let cascading_table = SimdCascadingTableU32U8Lookup::new(&lookup_table2);
-
-        // Create test values for table 2 (indices within table2_size)
-        let test_values2 = create_test_values(num_values, table2_size);
-
-        group.bench_function(BenchmarkId::new("simple_AND_cascading", size_label), |b| {
-            b.iter(|| {
-                // Temporary buffers for first stage output
-                let mut nonzero_results: Vec<u8> = Vec::with_capacity(chunk_size);
-                let mut indices: Vec<u32> = Vec::with_capacity(chunk_size);
-
-                // Final output buffers
-                let mut out_results: Vec<u8> = Vec::new();
-                let mut out_indices: Vec<u32> = Vec::new();
-
-                // Process in chunks
-                // Note: We chunk test_values1 for the first stage lookup, but pass the entire test_values2
-                // to cascading_lookup so that the absolute indices from the first stage work correctly.
-                for (chunk_idx, chunk1) in test_values1.chunks_exact(chunk_size).enumerate() {
-                    // Clear the temporary buffers for each chunk
-                    nonzero_results.clear();
-                    indices.clear();
-
-                    // Stage 1: Single table lookup with compression into nonzeroes
-                    let base_index = (chunk_idx * chunk_size) as u32;
-                    single_table.lookup_compress_into_nonzeroes(
-                        black_box(chunk1),
-                        &mut nonzero_results,
-                        &mut indices,
-                        base_index,
-                    );
-
-                    // Stage 2: Cascading lookup
-                    // Pass the entire test_values2 array so absolute indices work correctly
-                    cascading_table.cascading_lookup(
-                        black_box(&test_values2),
-                        &nonzero_results,
-                        &indices,
-                        |v1, v2| v1 & v2,
-                        &mut out_results,
-                        &mut out_indices,
-                    );
-                }
-                black_box(&out_results);
-                black_box(&out_indices);
-            })
-        });
-    }
-
-    group.finish();
-}
 
 criterion_group!(
     benches,
@@ -647,7 +555,6 @@ criterion_group!(
     // bench_joined_dual_table_lookup removed - see comments above for benchmark results
     bench_dual_table_lookup_v2,
     bench_dual_table_lookup_v2_simple,
-    bench_dual_table_with_hash,
-    bench_cascading_table_lookup
+    bench_dual_table_with_hash
 );
 criterion_main!(benches);
